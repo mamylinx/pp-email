@@ -544,6 +544,8 @@ func (m *Model) resultView() string {
 			note = "Saving report…"
 		case errors.Is(saveErr, reports.ErrDirectorySync):
 			note = "History file created, but the directory could not be synced. Press E to export."
+		case errors.Is(saveErr, reports.ErrPublishedCleanup):
+			note = "History file created, but cleanup failed."
 		case saveErr != nil:
 			note = "Could not save to history. Press E to export this run."
 		case len(run.UnrecordedLines) > 0:
@@ -711,7 +713,7 @@ func (m *Model) bottomLine() string {
 		if len(m.report.failedSaves) == 1 && errors.Is(m.report.failedSaves[m.report.latest.ID].err, reports.ErrDirectorySync) {
 			return "History file created, but the directory could not be synced."
 		}
-		return "Some reports could not be saved to history. Open Reports to export."
+		return "Some reports had save errors. Open Reports for details."
 	}
 	hint := "? Help  ·  Q Quit"
 	if m.screen == previewScreen || m.screen == resultScreen {

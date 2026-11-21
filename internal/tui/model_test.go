@@ -162,8 +162,7 @@ func TestBudgetConfirmationAndRunnerRecheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := session.WaitAndReserve(nil); err != nil {
-		session.Close()
-		t.Fatal(err)
+		t.Fatal(errors.Join(err, session.Close()))
 	}
 	session.MarkStarted()
 	if err := session.Close(); err != nil {

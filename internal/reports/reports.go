@@ -27,6 +27,9 @@ const version = 1
 // ErrDirectorySync indicates that the file exists but its directory could not be synced.
 var ErrDirectorySync = errors.New("report created but directory sync failed")
 
+// ErrPublishedCleanup indicates that the report exists and cleanup failed.
+var ErrPublishedCleanup = errors.New("report created but cleanup failed")
+
 type Status string
 
 const (
@@ -288,17 +291,26 @@ func spreadsheetText(value string) string {
 }
 
 // publish writes a private file and exposes it only after the contents are complete.
-func publish(path string, write func(io.Writer) error) error {
+func publish(path string, write func(io.Writer) error) (err error) {
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	var published bool
+	defer func() {
+		if closeErr := dir.Close(); closeErr != nil {
+			err = joinCleanupError(err, fmt.Errorf("close report directory: %w", closeErr), published)
+		}
+	}()
 	file, err := os.CreateTemp(dir.Name(), ".pp-email-report-*")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() {
+		if removeErr := os.Remove(file.Name()); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = joinCleanupError(err, fmt.Errorf("remove temporary report file: %w", removeErr), published)
+		}
+	}()
 	writeErr := write(file)
 	if writeErr == nil {
 		writeErr = file.Sync()
@@ -306,7 +318,16 @@ func publish(path string, write func(io.Writer) error) error {
 	if err := errors.Join(writeErr, file.Close()); err != nil {
 		return err
 	}
-	return linkAndSync(file.Name(), path, dir)
+	err = linkAndSync(file.Name(), path, dir)
+	published = err == nil || errors.Is(err, ErrDirectorySync)
+	return err
+}
+
+func joinCleanupError(err, cleanupErr error, published bool) error {
+	if published && !errors.Is(err, ErrPublishedCleanup) {
+		err = errors.Join(err, ErrPublishedCleanup)
+	}
+	return errors.Join(err, cleanupErr)
 }
 
 func linkAndSync(source, path string, dir *os.File) error {

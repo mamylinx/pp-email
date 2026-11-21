@@ -382,6 +382,9 @@ func (m *Model) receiveExport(msg exportedMsg) tea.Cmd {
 	case errors.Is(msg.err, reports.ErrDirectorySync):
 		m.report.exportPath = msg.path
 		m.report.exportNotice = "File created, but the directory could not be synced. Check the file at"
+	case errors.Is(msg.err, reports.ErrPublishedCleanup):
+		m.report.exportPath = msg.path
+		m.report.exportNotice = "File created, but cleanup failed. Check the file at"
 	case errors.Is(msg.err, os.ErrExist):
 		m.report.exportNotice = "A file already exists there. Choose a different name."
 	case msg.err != nil:

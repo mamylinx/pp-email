@@ -146,7 +146,7 @@ func (*noCopy) Unlock() {}
 // Begin checks that the batch fits within the account's remaining send budget
 // and holds the account lock until the caller closes the session.
 // It returns a nil session and a nil error when the account has no configured limits.
-func (l *Limits) Begin(account string, size int) (*Session, error) {
+func (l *Limits) Begin(account string, size int) (session *Session, err error) {
 	policy, ok := l.policy(account)
 	if !ok {
 		return nil, nil
@@ -159,8 +159,14 @@ func (l *Limits) Begin(account string, size int) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open send budget lock: %w", err)
 	}
+	defer func() {
+		if session == nil {
+			if closeErr := lock.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close send budget lock: %w", closeErr))
+			}
+		}
+	}()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, errors.New("another pp-email instance is sending with this account")
 		}
@@ -169,7 +175,6 @@ func (l *Limits) Begin(account string, size int) (*Session, error) {
 	path := base + ".json"
 	history, err := readLedger(path)
 	if err != nil {
-		lock.Close()
 		return nil, err
 	}
 	now := l.now()
@@ -183,7 +188,6 @@ func (l *Limits) Begin(account string, size int) (*Session, error) {
 	history.expire(now)
 	remaining := max(0, policy.MaxPer24Hours-len(history.Attempts))
 	if size > remaining {
-		lock.Close()
 		return nil, fmt.Errorf("batch size %d exceeds the rolling 24-hour budget of %d remaining", size, remaining)
 	}
 	return &Session{
@@ -267,12 +271,16 @@ func waitFor(delay time.Duration, stop <-chan struct{}) error {
 	}
 }
 
-func readJSON(path string, target any) error {
+func readJSON(path string, target any) (err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close json file: %w", closeErr))
+		}
+	}()
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -313,17 +321,28 @@ func writeLedger(path string, history ledger) error {
 	return nil
 }
 
-func replaceLedger(path string, history ledger) error {
+func replaceLedger(path string, history ledger) (err error) {
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() {
+		if closeErr := dir.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close send budget directory: %w", closeErr))
+		}
+	}()
 	file, err := os.CreateTemp(dir.Name(), "attempts-*")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	renamed := false
+	defer func() {
+		if !renamed {
+			if removeErr := os.Remove(file.Name()); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("remove temporary send budget file: %w", removeErr))
+			}
+		}
+	}()
 	writeErr := json.NewEncoder(file).Encode(history)
 	if writeErr == nil {
 		writeErr = file.Sync()
@@ -334,5 +353,6 @@ func replaceLedger(path string, history ledger) error {
 	if err := os.Rename(file.Name(), path); err != nil {
 		return err
 	}
+	renamed = true
 	return dir.Sync()
 }

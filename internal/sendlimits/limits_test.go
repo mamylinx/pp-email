@@ -97,7 +97,11 @@ func TestPacingAndRollingBudgetAcrossSessions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { session.lock.Close() })
+		t.Cleanup(func() {
+			if err := session.Close(); err != nil {
+				t.Error(err)
+			}
+		})
 		return session
 	}
 	reserve := func(session *Session, wantDelay time.Duration) {
@@ -176,7 +180,11 @@ func TestPacingWithinSessionAndPendingReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.lock.Close()
+	t.Cleanup(func() {
+		if err := session.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := session.WaitAndReserve(nil); err != nil || delay != 0 {
 		t.Fatalf("first send delay %s, error %v", delay, err)
 	}
@@ -189,6 +197,7 @@ func TestPacingWithinSessionAndPendingReservation(t *testing.T) {
 	if err := session.lock.Close(); err != nil {
 		t.Fatal(err)
 	}
+	session.lock = nil // The simulated termination already released the lock.
 	status, err := limits.Status("work")
 	if err != nil || status.Remaining != 0 {
 		t.Fatalf("pending reservation lost: %+v, %v", status, err)

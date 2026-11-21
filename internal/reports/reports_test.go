@@ -16,6 +16,15 @@ import (
 	"pp_email/internal/smail"
 )
 
+func TestSaveRejectsInvalidID(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	for _, id := range []string{"", "nested/report"} {
+		if err := Save(Report{Summary: Summary{ID: id}}); err == nil || err.Error() != "invalid report id" {
+			t.Errorf("Save with id %q: %v", id, err)
+		}
+	}
+}
+
 func TestLinkAndSyncDirectoryFailure(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "temp")

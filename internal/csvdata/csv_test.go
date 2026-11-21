@@ -2,11 +2,36 @@ package csvdata
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
 var ordered = Mapping{Name: 0, Address: 1, Subject: 2, Body: 3}
+
+func TestReadRequiresRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	pipe := filepath.Join(dir, "input.csv")
+	if err := syscall.Mkfifo(pipe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(pipe); err == nil || !strings.Contains(err.Error(), "regular CSV file") {
+		t.Fatalf("read non-regular file: %v", err)
+	}
+	source := filepath.Join(dir, "source.csv")
+	if err := os.WriteFile(source, []byte("Name\nAda\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.csv")
+	if err := os.Symlink(source, link); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := Read(link); err != nil || len(snapshot.Records) != 1 {
+		t.Fatalf("read CSV symlink: %v", err)
+	}
+}
 
 func TestRecoveryPreservesRawCSV(t *testing.T) {
 	header := "Field,Field,Subject,Body\r\n"

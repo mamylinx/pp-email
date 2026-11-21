@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -64,16 +65,20 @@ func Read(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("resolve CSV path: %w", err)
 	}
-	info, err := os.Stat(absolute)
+	file, err := os.OpenFile(absolute, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("open CSV: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return Snapshot{}, errors.Join(fmt.Errorf("inspect CSV: %w", err), file.Close())
 	}
 	if !info.Mode().IsRegular() {
-		return Snapshot{}, errors.New("choose a regular CSV file")
+		return Snapshot{}, errors.Join(errors.New("choose a regular CSV file"), file.Close())
 	}
-	data, err := os.ReadFile(absolute)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("open CSV: %w", err)
+	data, readErr := io.ReadAll(file)
+	if err := errors.Join(readErr, file.Close()); err != nil {
+		return Snapshot{}, fmt.Errorf("read CSV: %w", err)
 	}
 	return parse(absolute, data)
 }

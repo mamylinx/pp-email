@@ -37,7 +37,7 @@ type Limits struct {
 
 func Load(path string) (*Limits, error) {
 	var policies map[string]Policy
-	if err := readJSON(path, &policies); err != nil {
+	if err := readJSON(path, 0, &policies); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			info, statErr := os.Lstat(path)
 			switch {
@@ -155,7 +155,7 @@ func (l *Limits) Begin(account string, size int) (session *Session, err error) {
 		return nil, fmt.Errorf("create send budget directory: %w", err)
 	}
 	base := l.accountPath(account)
-	lock, err := os.OpenFile(base+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := os.OpenFile(base+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open send budget lock: %w", err)
 	}
@@ -166,6 +166,13 @@ func (l *Limits) Begin(account string, size int) (session *Session, err error) {
 			}
 		}
 	}()
+	info, err := lock.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect send budget lock: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("send budget lock must be a regular file")
+	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, errors.New("another pp-email instance is sending with this account")
@@ -271,8 +278,8 @@ func waitFor(delay time.Duration, stop <-chan struct{}) error {
 	}
 }
 
-func readJSON(path string, target any) (err error) {
-	file, err := os.Open(path)
+func readJSON(path string, flags int, target any) (err error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|flags, 0)
 	if err != nil {
 		return err
 	}
@@ -281,6 +288,13 @@ func readJSON(path string, target any) (err error) {
 			err = errors.Join(err, fmt.Errorf("close json file: %w", closeErr))
 		}
 	}()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect json file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("expected a regular json file")
+	}
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -294,7 +308,7 @@ func readJSON(path string, target any) (err error) {
 
 func readLedger(path string) (ledger, error) {
 	var history *ledger
-	if err := readJSON(path, &history); err != nil {
+	if err := readJSON(path, syscall.O_NOFOLLOW, &history); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ledger{}, nil
 		}

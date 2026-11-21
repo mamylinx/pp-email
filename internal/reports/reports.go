@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -129,6 +130,9 @@ func directory() (string, error) {
 }
 
 func Save(report Report) error {
+	if !validID(report.ID) {
+		return errors.New("invalid report id")
+	}
 	dir, err := directory()
 	if err != nil {
 		return err
@@ -186,8 +190,8 @@ func Sort(summaries []Summary) {
 }
 
 func Load(id string) (Report, error) {
-	if id == "" || strings.ContainsAny(id, "/\\") {
-		return Report{}, errors.New("invalid report ID")
+	if !validID(id) {
+		return Report{}, errors.New("invalid report id")
 	}
 	dir, err := directory()
 	if err != nil {
@@ -197,6 +201,10 @@ func Load(id string) (Report, error) {
 		return Report{}, err
 	}
 	return read(filepath.Join(dir, id+".json"))
+}
+
+func validID(id string) bool {
+	return id != "" && !strings.ContainsAny(id, "/\\")
 }
 
 func checkDirectory(path string) error {
@@ -211,15 +219,19 @@ func checkDirectory(path string) error {
 }
 
 func read(path string) (Report, error) {
-	info, err := os.Lstat(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return Report{}, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return Report{}, errors.New("the report must be a private regular file")
-	}
-	data, err := os.ReadFile(path)
+	info, err := file.Stat()
 	if err != nil {
+		return Report{}, errors.Join(err, file.Close())
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return Report{}, errors.Join(errors.New("the report must be a private regular file"), file.Close())
+	}
+	data, readErr := io.ReadAll(file)
+	if err := errors.Join(readErr, file.Close()); err != nil {
 		return Report{}, err
 	}
 	var report Report

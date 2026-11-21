@@ -73,6 +73,33 @@ func TestLoadSymlink(t *testing.T) {
 	}
 }
 
+func TestBudgetFilesRejectSymlinks(t *testing.T) {
+	for _, suffix := range []string{".lock", ".json"} {
+		t.Run(suffix, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", dir)
+			path := filepath.Join(dir, "limits.json")
+			writeConfig(t, path, exampleConfig)
+			limits, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(limits.stateDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(dir, "target")
+			writeConfig(t, target, `{"attempts":[]}`)
+			if err := os.Symlink(target, limits.accountPath("work")+suffix); err != nil {
+				t.Fatal(err)
+			}
+			session, err := limits.Begin("work", 1)
+			if err == nil {
+				t.Fatal(errors.Join(errors.New("opened a symlink in the budget state"), session.Close()))
+			}
+		})
+	}
+}
+
 func TestPacingAndRollingBudgetAcrossSessions(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "limits.json")

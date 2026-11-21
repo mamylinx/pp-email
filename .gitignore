@@ -1,0 +1,12 @@
+# IDE
+/.idea/
+
+# Build output
+/pp-email
+/dist/
+*.exe
+*.test
+*.out
+
+# Local recovery / exported batches
+pp-email-failures-*.csv

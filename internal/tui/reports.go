@@ -37,6 +37,11 @@ type exportedMsg struct {
 	err  error
 }
 
+type failedSave struct {
+	report reports.Report
+	err    error
+}
+
 type reportView struct {
 	history         browser
 	rows            browser
@@ -47,7 +52,7 @@ type reportView struct {
 	latest          reports.Report
 	current         reports.Report
 	saving          bool
-	saveErr         error
+	failedSaves     map[string]failedSave
 	filter          int
 	runInfo         bool
 	isExportOpen    bool
@@ -93,7 +98,7 @@ func (m *Model) finishRun(result batch.Result) tea.Cmd {
 	})
 	m.events, m.stop = nil, nil
 	m.help = false
-	m.report.latest, m.report.saving, m.report.saveErr = latest, true, nil
+	m.report.latest, m.report.saving = latest, true
 	m.resetDraft()
 	m.showReport(latest)
 	return func() tea.Msg { return reportSavedMsg{err: reports.Save(latest)} }
@@ -110,9 +115,16 @@ func (m *Model) resetDraft() {
 }
 
 func (m *Model) receiveSave(msg reportSavedMsg) tea.Cmd {
-	m.report.saving, m.report.saveErr = false, msg.err
+	m.report.saving = false
+	if msg.err != nil {
+		if m.report.failedSaves == nil {
+			m.report.failedSaves = make(map[string]failedSave)
+		}
+		run := m.report.latest
+		m.report.failedSaves[run.ID] = failedSave{report: run, err: msg.err}
+	}
 	if m.screen == historyScreen {
-		m.includeLatest()
+		m.includeSessionReports()
 		m.refreshHistory()
 	}
 	return m.report.finishPendingQuit(msg.err)
@@ -147,20 +159,25 @@ func (m *Model) receiveHistory(msg historyMsg) {
 	case msg.skipped > 0:
 		m.report.historyNote = fmt.Sprintf("Skipped %d unreadable reports.", msg.skipped)
 	}
-	m.includeLatest()
+	m.includeSessionReports()
 	m.refreshHistory()
 }
 
-func (m *Model) includeLatest() {
-	if m.report.latest.ID == "" {
-		return
-	}
+func (m *Model) includeSessionReports() {
+	seen := make(map[string]bool, len(m.report.summaries))
 	for _, summary := range m.report.summaries {
-		if summary.ID == m.report.latest.ID {
-			return
+		seen[summary.ID] = true
+	}
+	include := func(summary reports.Summary) {
+		if summary.ID != "" && !seen[summary.ID] {
+			m.report.summaries = append(m.report.summaries, summary)
+			seen[summary.ID] = true
 		}
 	}
-	m.report.summaries = append(m.report.summaries, m.report.latest.Summary)
+	include(m.report.latest.Summary)
+	for _, failed := range m.report.failedSaves {
+		include(failed.report.Summary)
+	}
 	reports.Sort(m.report.summaries)
 }
 
@@ -199,6 +216,10 @@ func (m *Model) updateHistory(msg tea.KeyPressMsg) tea.Cmd {
 		id := m.report.summaries[i].ID
 		if id == m.report.latest.ID {
 			m.showReport(m.report.latest)
+			return nil
+		}
+		if failed, ok := m.report.failedSaves[id]; ok {
+			m.showReport(failed.report)
 			return nil
 		}
 		m.report.pendingID = id

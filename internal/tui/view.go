@@ -312,6 +312,9 @@ func (m *Model) accountView() string {
 }
 
 func (m *Model) fileListView() string {
+	if m.isReadingDirectory {
+		return "Reading directory…"
+	}
 	// Apply styling after cleaning the file picker text so it keeps the highlight.
 	lines := strings.Split(cleanMultiline(m.picker.View()), "\n")
 	for i, line := range lines {
@@ -535,12 +538,13 @@ func (m *Model) resultView() string {
 	}
 	note := m.report.exportNotice
 	if note == "" {
+		saveErr := m.report.failedSaves[run.ID].err
 		switch {
 		case run.ID == m.report.latest.ID && m.report.saving:
 			note = "Saving report…"
-		case run.ID == m.report.latest.ID && errors.Is(m.report.saveErr, reports.ErrDirectorySync):
+		case errors.Is(saveErr, reports.ErrDirectorySync):
 			note = "History file created, but the directory could not be synced. Press E to export."
-		case run.ID == m.report.latest.ID && m.report.saveErr != nil:
+		case saveErr != nil:
 			note = "Could not save to history. Press E to export this run."
 		case len(run.UnrecordedLines) > 0:
 			note = fmt.Sprintf("Source line %d could not be saved to recovery. Press I for details.", run.UnrecordedLines[0])
@@ -703,11 +707,11 @@ func (m *Model) bottomLine() string {
 	if m.screen == sendingScreen {
 		return "? Help"
 	}
-	if m.report.saveErr != nil && m.screen != resultScreen {
-		if errors.Is(m.report.saveErr, reports.ErrDirectorySync) {
+	if len(m.report.failedSaves) > 0 && m.screen != resultScreen {
+		if len(m.report.failedSaves) == 1 && errors.Is(m.report.failedSaves[m.report.latest.ID].err, reports.ErrDirectorySync) {
 			return "History file created, but the directory could not be synced."
 		}
-		return "Latest run has an unsaved report. Open Reports to export."
+		return "Some reports could not be saved to history. Open Reports to export."
 	}
 	hint := "? Help  ·  Q Quit"
 	if m.screen == previewScreen || m.screen == resultScreen {

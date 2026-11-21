@@ -53,6 +53,8 @@ type accountsMsg struct {
 	err   error
 }
 
+type directoryReadMsg struct{ result tea.Msg }
+
 type csvMsg struct {
 	snapshot csvdata.Snapshot
 	err      error
@@ -74,13 +76,14 @@ type Model struct {
 	queries       map[screen]string
 	previousQuery string
 
-	directory string
-	accounts  []string
-	account   string
-	choice    int
-	loading   bool
-	picker    filepicker.Model
-	err       string
+	directory          string
+	accounts           []string
+	account            string
+	choice             int
+	loading            bool
+	picker             filepicker.Model
+	isReadingDirectory bool
+	err                string
 
 	snapshot              csvdata.Snapshot
 	columns               [len(fieldLabels)]int
@@ -143,6 +146,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 		} else if len(msg.names) == 0 {
 			m.err = "Set up a named s-nail account, then press R to reload."
+		}
+		return m, nil
+	case directoryReadMsg:
+		m.isReadingDirectory = false
+		m.picker, _ = m.picker.Update(msg.result)
+		if m.picker.HighlightedPath() == "" {
+			// A refreshed directory can be shorter than the previous selection.
+			m.picker, _ = m.picker.Update(tea.KeyPressMsg{Code: 'g'})
 		}
 		return m, nil
 	case csvMsg:
@@ -248,7 +259,7 @@ func (m *Model) updateKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.screen = mappingScreen
 		case "f":
 			m.screen = fileScreen
-			return m.picker.Init()
+			return m.readDirectory(m.picker.Init())
 		default:
 			return m.scrollDetail(msg)
 		}
@@ -293,7 +304,7 @@ func (m *Model) openDraft() tea.Cmd {
 	m.resize(m.width, m.height)
 	switch m.screen {
 	case fileScreen:
-		return m.picker.Init()
+		return m.readDirectory(m.picker.Init())
 	case validationScreen:
 		m.validateMapping()
 	case previewScreen:
@@ -325,7 +336,7 @@ func (m *Model) updateAccount(action string) tea.Cmd {
 		if len(choices) > 0 {
 			m.account = choices[m.choice]
 			m.err, m.screen = "", fileScreen
-			return m.picker.Init()
+			return m.readDirectory(m.picker.Init())
 		}
 	default:
 		m.choice = moveChoice(action, m.choice, len(choices))
@@ -333,13 +344,28 @@ func (m *Model) updateAccount(action string) tea.Cmd {
 	return nil
 }
 
+func (m *Model) readDirectory(read tea.Cmd) tea.Cmd {
+	if m.isReadingDirectory {
+		return nil
+	}
+	m.isReadingDirectory = true
+	return func() tea.Msg { return directoryReadMsg{result: read()} }
+}
+
 func (m *Model) updateFile(msg tea.Msg) tea.Cmd {
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "esc" {
 		m.screen, m.err = accountScreen, ""
 		return nil
 	}
+	if m.isReadingDirectory {
+		return nil
+	}
 	var cmd tea.Cmd
+	m.picker.Path = ""
 	m.picker, cmd = m.picker.Update(msg)
+	if cmd != nil {
+		return m.readDirectory(cmd)
+	}
 	if selected, path := m.picker.DidSelectFile(msg); selected {
 		m.screen, m.err = loadingScreen, ""
 		return func() tea.Msg {
@@ -347,7 +373,7 @@ func (m *Model) updateFile(msg tea.Msg) tea.Cmd {
 			return csvMsg{snapshot: snapshot, err: err}
 		}
 	}
-	return cmd
+	return nil
 }
 
 func (m *Model) updateMapping(action string) tea.Cmd {
@@ -355,7 +381,7 @@ func (m *Model) updateMapping(action string) tea.Cmd {
 	case "esc":
 		if m.field == 0 {
 			m.screen = fileScreen
-			return m.picker.Init()
+			return m.readDirectory(m.picker.Init())
 		}
 		m.selectField(m.field - 1)
 	case "shift+tab", "left":

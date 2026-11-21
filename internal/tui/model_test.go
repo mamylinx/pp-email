@@ -485,3 +485,86 @@ func TestReportCanBeExportedWhenHistoryCannotBeSaved(t *testing.T) {
 	advance(t, model, press(tea.KeyEnter))
 	requireView(t, model, "Report saved to")
 }
+
+func TestFilePickerIgnoresKeysDuringDirectoryRead(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"first.csv", "second.csv"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("name\nAda\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(testMailer{}, dir, nil)
+	m.Update(m.listAccounts())
+	_, read := m.Update(press(tea.KeyEnter))
+	m.Update(press(tea.KeyDown))
+	if _, cmd := m.Update(press(tea.KeyEnter)); cmd != nil {
+		t.Fatal("selected a file before the directory loaded")
+	}
+	m.Update(read())
+	if got := m.picker.HighlightedPath(); got != filepath.Join(dir, "first.csv") {
+		t.Fatalf("selection after early key press: %q", got)
+	}
+	m.Update(press(tea.KeyDown))
+	m.Update(press(tea.KeyEscape))
+	if err := os.Remove(filepath.Join(dir, "second.csv")); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, m, press(tea.KeyEnter))
+	advance(t, m, press(tea.KeyEnter))
+	if m.screen != mappingScreen || m.snapshot.Path != filepath.Join(dir, "first.csv") {
+		t.Fatalf("selection after directory shrank: screen %v, file %q", m.screen, m.snapshot.Path)
+	}
+}
+
+func TestEarlierUnsavedReportsRemainAvailableForExport(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	blocker := filepath.Join(state, "pp-email")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := New(testMailer{}, t.TempDir(), nil)
+	finish := func(line int) string {
+		m.started = time.Now()
+		m.messages = []csvdata.Message{{Record: csvdata.Record{Line: line}}}
+		save := m.finishRun(batch.Result{Counts: batch.Counts{Accepted: 1}})
+		m.Update(save())
+		return m.report.latest.ID
+	}
+	first, second := finish(2), finish(3)
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	newest := finish(4)
+	advance(t, m, press('2'))
+	if len(m.report.summaries) != 3 {
+		t.Fatalf("history after two failed saves and one successful save: %+v", m.report.summaries)
+	}
+	for _, id := range []string{first, second} {
+		i := slices.IndexFunc(m.report.summaries, func(s reports.Summary) bool { return s.ID == id })
+		if i < 0 {
+			t.Fatalf("missing unsaved report %s", id)
+		}
+		m.report.history.table.SetCursor(i)
+		m.Update(press(tea.KeyEnter))
+		if m.report.current.ID != id {
+			t.Fatalf("opened %q, want %q", m.report.current.ID, id)
+		}
+		requireView(t, m, "Could not save to history")
+		m.Update(press('e'))
+		advance(t, m, press(tea.KeyEnter))
+		data, err := os.ReadFile(m.report.exportPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := csv.NewReader(bytes.NewReader(data)).ReadAll()
+		if err != nil || len(rows) != 2 || rows[1][0] != id {
+			t.Fatalf("export of %s: %v, %v", id, rows, err)
+		}
+		m.Update(press(tea.KeyEnter))
+		advance(t, m, press('2'))
+	}
+	if _, err := reports.Load(newest); err != nil {
+		t.Fatalf("latest saved report: %v", err)
+	}
+}

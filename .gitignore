@@ -10,3 +10,6 @@
 
 # Local recovery / exported batches
 pp-email-failures-*.csv
+
+# Local CSV inputs
+/data/

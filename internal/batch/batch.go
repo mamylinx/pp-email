@@ -1,3 +1,4 @@
+// Package batch submits confirmed messages in CSV order and records rows for recovery.
 package batch
 
 import (
@@ -135,6 +136,8 @@ type Request struct {
 	Limits         *sendlimits.Limits
 }
 
+// Run starts a batch and streams progress followed by a final result.
+// Read events through the final result, even after signaling a stop.
 func Run(request Request) <-chan Event {
 	events := make(chan Event, 1)
 	go func() {

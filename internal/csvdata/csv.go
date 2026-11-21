@@ -1,3 +1,4 @@
+// Package csvdata reads CSV files, prepares messages, and preserves source bytes for recovery.
 package csvdata
 
 import (

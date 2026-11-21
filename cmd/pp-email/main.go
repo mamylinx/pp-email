@@ -1,3 +1,4 @@
+// Command pp-email sends personalized emails from CSV rows through s-nail.
 package main
 
 import (

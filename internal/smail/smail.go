@@ -1,3 +1,4 @@
+// Package smail discovers s-nail accounts and submits messages through their SMTP transports.
 package smail
 
 import (

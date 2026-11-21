@@ -1,3 +1,4 @@
+// Package tui guides terminal users through batch preparation, sending, and report review.
 package tui
 
 import (

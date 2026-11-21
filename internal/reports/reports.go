@@ -1,3 +1,4 @@
+// Package reports stores batch outcomes in run history and exports them as CSV.
 package reports
 
 import (

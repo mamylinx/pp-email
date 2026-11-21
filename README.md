@@ -7,7 +7,6 @@ Send one personalized email per CSV row from a Linux terminal. Choose a named s-
 Use Go 1.27 and install s-nail on your PATH. The adapter was checked with s-nail 14.9.25.
 
 ~~~sh
-go mod tidy
 go build ./cmd/pp-email
 ./pp-email
 ~~~
@@ -42,15 +41,17 @@ Create `~/.config/pp-email/limits.json` to set the sending rate and rolling 24-h
 }
 ~~~
 
-Choose values for your own provider quotas and sending volume. Confirmation shows the configured rate and remaining budget. A batch must fit in full before it can start. Press Esc during a pacing wait to stop before the next message. Accounts without an entry send as usual.
+From **Review**, press **Enter** to open the **Send** screen. **Pacing** shows the configured rate. **Send budget** shows how many attempts remain for the selected account in the rolling 24-hour window. A batch must fit in full before it can start. Press Esc during a pacing wait to stop before the next message. Accounts without an entry show **No limits configured**.
 
-The budget counts attempts made by pp-email while the account has limits configured, including unconfirmed submissions. Leave room for messages sent through the same account from other apps. The attempt history persists under `$XDG_STATE_HOME/pp-email` or `~/.local/state/pp-email`. Restart pp-email after editing the configuration.
+Choose values for your own provider quotas and sending volume. The budget counts attempts made by pp-email while the account has limits configured, including unconfirmed submissions. Leave room for messages sent through the same account from other apps. The attempt history persists under `$XDG_STATE_HOME/pp-email` or `~/.local/state/pp-email`. Restart pp-email after editing the configuration.
 
 ## Reports and recovery
 
 Press `2` to open **Reports**. Search run history by account or CSV filename and press Enter to open a run. Use Left and Right to filter outcomes and `/` to search for a source line. Press Tab to read a row's diagnostic, I to open run details, or E to export the full run as CSV. Choose a new export path for each file.
 
-History starts with runs finalized after this upgrade. Reports are stored in owner-only files under `$XDG_STATE_HOME/pp-email/reports` or `~/.local/state/pp-email/reports`. Row details include source line, outcome, and diagnostic. Recipient names, addresses, subjects, and bodies stay in the source and recovery CSVs.
+When a batch finishes, pp-email saves its report in an owner-only file under `$XDG_STATE_HOME/pp-email/reports` or `~/.local/state/pp-email/reports`. Row details include source line, outcome, and diagnostic. Recipient names, addresses, subjects, and bodies stay in the source and recovery CSVs.
+
+If saving to history fails, the report stays available under **Reports** for the rest of the session, even after later batches finish. Open it and press **E** to export it before closing pp-email.
 
 The results show accepted submissions, unconfirmed submissions, and unattempted rows. Acceptance means the SMTP server accepted the submission. When s-nail reports an unconfirmed outcome, the app saves the original row in an owner-only `pp-email-failures-*.csv` beside the source file and continues when possible. Review each unconfirmed row before resending, since a timeout or interrupted connection can leave acceptance unknown. Open a recovery CSV as a new batch after checking the outcomes and addressing the cause.
 

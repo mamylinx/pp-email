@@ -1,3 +1,4 @@
+// Package appstate locates the directory for pp-email's persistent state.
 package appstate
 
 import (

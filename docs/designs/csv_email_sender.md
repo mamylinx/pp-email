@@ -123,7 +123,7 @@ Accept comma-delimited UTF-8 CSV with a header and at least one data row. Allow 
 
 Index physical line starts in the original bytes. Skip a leading BOM only in the decoder view. For the header and every data record, find its starting physical line with `FieldPos(0)`. End its raw span at `InputOffset` plus the skipped BOM length. Start at that physical line's byte offset, except that a record starting on the first physical line begins after the BOM. Use these spans so skipped blank lines stay out of the recovery CSV and CRLF bytes inside a quoted field survive decoder normalization. Write the original BOM once, followed by the raw header and each selected raw record.
 
-Map name, email address, subject, and body by column position. Reject control characters in name, address, and subject before trimming surrounding address spaces. Validate a single plain mailbox containing an `@` with `net/mail` and format it with the mapped display name. Allow blank name, subject, and body values. Allow CR, LF, and tab in the body and reject other control characters, including NUL. [Go mail package](https://pkg.go.dev/net/mail)
+Map name, email address, subject, and body by column position. Reject control characters in name, address, and subject before trimming surrounding address spaces. Validate a single plain mailbox containing an `@` with `net/mail` and format it with the mapped display name. Allow blank name, subject, and body values. Allow carriage returns, line feeds, horizontal tabs, and vertical tabs in the body. Reject other control characters, including NUL. Decode `\r`, `\n`, `\t`, and `\v` in the body. A doubled backslash keeps the escape as literal text. [Go mail package](https://pkg.go.dev/net/mail)
 
 ### S-nail commands and endpoint policy
 

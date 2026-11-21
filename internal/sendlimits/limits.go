@@ -1,3 +1,4 @@
+// Package sendlimits enforces per-account pacing and rolling 24-hour send budgets.
 package sendlimits
 
 import (
@@ -134,6 +135,9 @@ type Session struct {
 	dirty     bool
 }
 
+// Begin checks that the batch fits within the account's remaining send budget
+// and holds the account lock until the caller closes the session.
+// It returns a nil session and a nil error when the account has no configured limits.
 func (l *Limits) Begin(account string, size int) (*Session, error) {
 	policy, ok := l.policy(account)
 	if !ok {

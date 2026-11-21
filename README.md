@@ -31,6 +31,10 @@ Hi Ada,
 Your order is ready.
 ```
 
+![Terminal screencast showing CSV column mapping, two personalized email previews, and send confirmation](docs/assets/pp-email-screencast.gif)
+
+[**Watch the 38-second demo (MP4)**](docs/assets/pp-email-screencast.mp4)
+
 ## Quickstart
 
 ### Requirements

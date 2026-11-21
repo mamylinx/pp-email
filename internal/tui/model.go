@@ -62,15 +62,14 @@ type csvMsg struct {
 }
 
 type Model struct {
-	mailer         Mailer
-	createRecovery batch.CreateRecoveryFunc
-	limits         *sendlimits.Limits
-	screen         screen
-	draft          screen
-	width          int
-	height         int
-	styles         theme
-	help           bool
+	mailer Mailer
+	limits *sendlimits.Limits
+	screen screen
+	draft  screen
+	width  int
+	height int
+	styles theme
+	help   bool
 
 	input         textField
 	searching     bool
@@ -106,6 +105,8 @@ type Model struct {
 	report   reportView
 }
 
+var _ tea.Model = (*Model)(nil)
+
 func New(mailer Mailer, directory string, limits *sendlimits.Limits) *Model {
 	picker := filepicker.New()
 	picker.CurrentDirectory = directory
@@ -115,7 +116,7 @@ func New(mailer Mailer, directory string, limits *sendlimits.Limits) *Model {
 	detail := viewport.New()
 	detail.SoftWrap = true
 	model := &Model{
-		mailer: mailer, createRecovery: batch.CreateRecovery, limits: limits, loading: true,
+		mailer: mailer, limits: limits, loading: true,
 		directory: directory, picker: picker, detail: detail,
 		queries: make(map[screen]string), preview: newBrowser(), report: newReportView(),
 	}
@@ -607,13 +608,12 @@ func (m *Model) startBatch() tea.Cmd {
 	m.progress = batch.Progress{Counts: batch.Counts{Unattempted: len(m.messages)}}
 	m.stop = make(chan struct{})
 	m.events = batch.Run(batch.Request{
-		Account:        m.account,
-		Snapshot:       m.snapshot,
-		Messages:       m.messages,
-		Adapter:        m.mailer,
-		CreateRecovery: m.createRecovery,
-		Stop:           m.stop,
-		Limits:         m.limits,
+		Account:  m.account,
+		Snapshot: m.snapshot,
+		Messages: m.messages,
+		Adapter:  m.mailer,
+		Stop:     m.stop,
+		Limits:   m.limits,
 	})
 	return waitEvent(m.events)
 }

@@ -18,7 +18,7 @@ type Adapter interface {
 	Send(account string, endpoint smail.Endpoint, message csvdata.Message) smail.SendResult
 }
 
-type RecoveryFile interface {
+type recoveryFile interface {
 	io.WriteCloser
 	io.Seeker
 	Name() string
@@ -26,14 +26,10 @@ type RecoveryFile interface {
 	Truncate(size int64) error
 }
 
-type CreateRecoveryFunc func(directory string) (RecoveryFile, error)
-
-func CreateRecovery(directory string) (RecoveryFile, error) {
-	return os.CreateTemp(directory, "pp-email-failures-*.csv")
-}
-
 type Counts struct {
-	Accepted, Unconfirmed, Unattempted int
+	Accepted    int `json:"Accepted"`
+	Unconfirmed int `json:"Unconfirmed"`
+	Unattempted int `json:"Unattempted"`
 }
 
 type Phase int
@@ -81,6 +77,8 @@ type RowResult struct {
 	Reason  string        `json:"diagnostic,omitempty"`
 }
 
+var _ json.Unmarshaler = (*RowResult)(nil)
+
 // UnmarshalJSON requires an explicit outcome because zero means unattempted.
 func (r *RowResult) UnmarshalJSON(data []byte) error {
 	var row struct {
@@ -127,13 +125,14 @@ type Event struct {
 }
 
 type Request struct {
-	Account        string
-	Snapshot       csvdata.Snapshot
-	Messages       []csvdata.Message
-	Adapter        Adapter
-	CreateRecovery CreateRecoveryFunc
-	Stop           <-chan struct{}
-	Limits         *sendlimits.Limits
+	Account  string
+	Snapshot csvdata.Snapshot
+	Messages []csvdata.Message
+	Adapter  Adapter
+	Stop     <-chan struct{}
+	Limits   *sendlimits.Limits
+
+	createRecovery func(directory string) (recoveryFile, error)
 }
 
 // Run starts a batch and streams progress followed by a final result.
@@ -182,7 +181,13 @@ func run(request Request, events chan<- Event) (result Result) {
 		}
 	}()
 
-	file, err := request.CreateRecovery(filepath.Dir(request.Snapshot.Path))
+	directory := filepath.Dir(request.Snapshot.Path)
+	var file recoveryFile
+	if request.createRecovery == nil {
+		file, err = os.CreateTemp(directory, "pp-email-failures-*.csv")
+	} else {
+		file, err = request.createRecovery(directory)
+	}
 	if err != nil {
 		result.Error = "could not create a recovery CSV beside the source file"
 		return result
@@ -214,7 +219,7 @@ func run(request Request, events chan<- Event) (result Result) {
 	return result
 }
 
-func closeRecovery(file RecoveryFile, result *Result) {
+func closeRecovery(file recoveryFile, result *Result) {
 	if err := file.Close(); err != nil {
 		result.RecoveryStatus = RecoveryUnverified
 		addError(result, "could not close the recovery CSV")
@@ -233,7 +238,7 @@ type sender struct {
 	request  Request
 	endpoint smail.Endpoint
 	session  *sendlimits.Session
-	file     RecoveryFile
+	file     recoveryFile
 	offset   int64
 	result   *Result
 	events   chan<- Event
@@ -307,7 +312,7 @@ func (s *sender) sendAll() {
 	}
 }
 
-func writeAndSync(file RecoveryFile, write func(io.Writer) error) (int64, error) {
+func writeAndSync(file recoveryFile, write func(io.Writer) error) (int64, error) {
 	if err := write(file); err != nil {
 		return 0, err
 	}

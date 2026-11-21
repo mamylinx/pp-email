@@ -124,7 +124,9 @@ func (l *ledger) expire(now time.Time) {
 	l.Attempts = kept
 }
 
+// Session holds the budget lock for a batch and must not be copied.
 type Session struct {
+	noCopy    noCopy
 	limits    *Limits
 	policy    Policy
 	lock      *os.File
@@ -134,6 +136,12 @@ type Session struct {
 	reserved  bool
 	dirty     bool
 }
+
+// noCopy lets go vet detect copies of an active session.
+type noCopy struct{}
+
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
 
 // Begin checks that the batch fits within the account's remaining send budget
 // and holds the account lock until the caller closes the session.

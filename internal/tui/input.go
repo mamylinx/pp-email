@@ -21,7 +21,7 @@ func (f *textField) SetValue(value string) {
 	f.cursor = len(f.value)
 }
 
-func (f textField) Value() string { return string(f.value) }
+func (f *textField) Value() string { return string(f.value) }
 
 func (f *textField) Update(msg tea.Msg) {
 	switch msg := msg.(type) {
@@ -70,7 +70,7 @@ func (f *textField) insert(text string) {
 	f.cursor += len(runes)
 }
 
-func (f textField) View(placeholder string) string {
+func (f *textField) View(placeholder string) string {
 	if len(f.value) == 0 {
 		return "▏" + placeholder
 	}

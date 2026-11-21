@@ -91,7 +91,7 @@ func New(input Input) Report {
 		Error:                CleanText(input.Result.Error),
 		RecoveryPath:         input.Result.RecoveryPath,
 		RecoveryStatus:       input.Result.RecoveryStatus,
-		UnrecordedLines:      input.Result.UnrecordedLines,
+		UnrecordedLines:      slices.Clone(input.Result.UnrecordedLines),
 		FirstUnattemptedLine: input.Result.FirstUnattemptedLine,
 		Rows:                 rows,
 	}

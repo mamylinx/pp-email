@@ -41,6 +41,15 @@ func TestLinkAndSyncDirectoryFailure(t *testing.T) {
 	}
 }
 
+func TestNewCopiesUnrecordedLines(t *testing.T) {
+	lines := []int{4}
+	report := New(Input{Result: batch.Result{UnrecordedLines: lines}})
+	lines[0] = 8
+	if !slices.Equal(report.UnrecordedLines, []int{4}) {
+		t.Fatalf("report unrecorded lines changed: %v", report.UnrecordedLines)
+	}
+}
+
 func TestReportStoreAndSpreadsheetExport(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -99,6 +108,9 @@ func TestReportStoreAndSpreadsheetExport(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"counts":{"Accepted":1,"Unconfirmed":1,"Unattempted":0}`)) {
+		t.Errorf("saved report changed the version 1 count fields: %s", data)
 	}
 	privateValues := []string{
 		"Personal Name", "private@example.invalid", "Private subject",

@@ -59,15 +59,15 @@ type csvMsg struct {
 }
 
 type Model struct {
-	mailer Mailer
-	open   batch.OpenRecovery
-	limits *sendlimits.Limits
-	screen screen
-	draft  screen
-	width  int
-	height int
-	styles theme
-	help   bool
+	mailer         Mailer
+	createRecovery batch.CreateRecoveryFunc
+	limits         *sendlimits.Limits
+	screen         screen
+	draft          screen
+	width          int
+	height         int
+	styles         theme
+	help           bool
 
 	input         textField
 	searching     bool
@@ -82,17 +82,17 @@ type Model struct {
 	picker    filepicker.Model
 	err       string
 
-	snapshot   csvdata.Snapshot
-	columns    [len(fieldLabels)]int
-	field      int
-	column     int
-	messages   []csvdata.Message
-	preview    browser
-	detail     viewport.Model
-	focus      bool
-	draftFocus bool
-	budget     sendlimits.Status
-	budgetErr  error
+	snapshot              csvdata.Snapshot
+	columns               [len(fieldLabels)]int
+	field                 int
+	column                int
+	messages              []csvdata.Message
+	preview               browser
+	detail                viewport.Model
+	isDetailFocused       bool
+	wasDraftDetailFocused bool
+	budget                sendlimits.Status
+	budgetErr             error
 
 	stop     chan struct{}
 	events   <-chan batch.Event
@@ -111,7 +111,7 @@ func New(mailer Mailer, directory string, limits *sendlimits.Limits) *Model {
 	detail := viewport.New()
 	detail.SoftWrap = true
 	model := &Model{
-		mailer: mailer, open: batch.CreateRecovery, limits: limits, loading: true,
+		mailer: mailer, createRecovery: batch.CreateRecovery, limits: limits, loading: true,
 		directory: directory, picker: picker, detail: detail,
 		queries: make(map[screen]string), preview: newBrowser(), report: newReportView(),
 	}
@@ -190,13 +190,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.fits() {
-			canQuit := msg.String() == "q" && !m.searching && !m.report.exporting
+			canQuit := msg.String() == "q" && !m.searching && !m.report.isExportOpen
 			if canQuit {
 				return m, m.requestStop(false)
 			}
 			return m, nil
 		}
-		if m.searching || m.report.exporting {
+		if m.searching || m.report.isExportOpen {
 			return m, m.updateInput(msg)
 		}
 		if m.help {
@@ -207,7 +207,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.updateKey(msg)
 	}
-	if m.searching || m.report.exporting {
+	if m.searching || m.report.isExportOpen {
 		return m, m.updateInput(msg)
 	}
 	if m.screen == fileScreen {
@@ -255,8 +255,8 @@ func (m *Model) updateKey(msg tea.KeyPressMsg) tea.Cmd {
 	case previewScreen:
 		switch action {
 		case "esc":
-			if m.focus {
-				m.focus = false
+			if m.isDetailFocused {
+				m.isDetailFocused = false
 			} else {
 				m.screen = mappingScreen
 			}
@@ -289,7 +289,7 @@ func (m *Model) openDraft() tea.Cmd {
 		return nil
 	}
 	m.report.pendingID = ""
-	m.screen, m.focus = m.draft, m.draftFocus
+	m.screen, m.isDetailFocused = m.draft, m.wasDraftDetailFocused
 	m.resize(m.width, m.height)
 	switch m.screen {
 	case fileScreen:
@@ -406,7 +406,7 @@ func (m *Model) validateMapping() {
 		return
 	}
 	m.messages = messages
-	m.screen, m.focus = previewScreen, false
+	m.screen, m.isDetailFocused = previewScreen, false
 	m.refreshPreview()
 	m.resize(m.width, m.height)
 }
@@ -480,12 +480,12 @@ func (m *Model) scrollDetail(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *Model) toggleDetail(list *browser) {
 	if _, ok := list.selected(); ok {
-		m.focus = !m.focus
+		m.isDetailFocused = !m.isDetailFocused
 	}
 }
 
 func (m *Model) browse(msg tea.KeyPressMsg, list *browser, selectDetail func()) tea.Cmd {
-	if m.focus {
+	if m.isDetailFocused {
 		return m.scrollDetail(msg)
 	}
 	cursor := list.table.Cursor()
@@ -511,7 +511,7 @@ func (m *Model) startSearch() tea.Cmd {
 	if m.report.runInfo {
 		m.selectReportRow()
 	}
-	m.focus, m.report.runInfo = false, false
+	m.isDetailFocused, m.report.runInfo = false, false
 	m.resize(m.width, m.height)
 	m.searching = true
 	m.previousQuery = m.queries[m.screen]
@@ -520,7 +520,7 @@ func (m *Model) startSearch() tea.Cmd {
 }
 
 func (m *Model) updateInput(msg tea.Msg) tea.Cmd {
-	if m.report.exporting {
+	if m.report.isExportOpen {
 		return m.updateExport(msg)
 	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
@@ -580,13 +580,13 @@ func (m *Model) startBatch() tea.Cmd {
 	m.progress = batch.Progress{Counts: batch.Counts{Unattempted: len(m.messages)}}
 	m.stop = make(chan struct{})
 	m.events = batch.Run(batch.Request{
-		Account:  m.account,
-		Snapshot: m.snapshot,
-		Messages: m.messages,
-		Adapter:  m.mailer,
-		Open:     m.open,
-		Stop:     m.stop,
-		Limits:   m.limits,
+		Account:        m.account,
+		Snapshot:       m.snapshot,
+		Messages:       m.messages,
+		Adapter:        m.mailer,
+		CreateRecovery: m.createRecovery,
+		Stop:           m.stop,
+		Limits:         m.limits,
 	})
 	return waitEvent(m.events)
 }
@@ -608,11 +608,11 @@ func (m *Model) requestStop(interrupt bool) tea.Cmd {
 		}
 		return nil
 	}
-	if m.report.saving || m.report.writing {
+	if m.report.saving || m.report.isWritingExport {
 		m.report.quitAfterIO = true
 		return nil
 	}
-	if interrupt && m.report.exporting {
+	if interrupt && m.report.isExportOpen {
 		m.cancelExport()
 		return nil
 	}

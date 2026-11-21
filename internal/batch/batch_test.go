@@ -56,11 +56,11 @@ func fixture(t *testing.T) (csvdata.Snapshot, []csvdata.Message) {
 
 func testRequest(snapshot csvdata.Snapshot, messages []csvdata.Message, mailer Adapter) Request {
 	return Request{
-		Account:  "chosen",
-		Snapshot: snapshot,
-		Messages: messages,
-		Adapter:  mailer,
-		Open:     CreateRecovery,
+		Account:        "chosen",
+		Snapshot:       snapshot,
+		Messages:       messages,
+		Adapter:        mailer,
+		CreateRecovery: CreateRecovery,
 	}
 }
 
@@ -275,7 +275,7 @@ func TestRecoveryFileErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			snapshot, messages := fixture(t)
-			open := func(dir string) (RecoveryFile, error) {
+			createRecovery := func(dir string) (RecoveryFile, error) {
 				file, err := os.CreateTemp(dir, "pp-email-failures-*.csv")
 				if err != nil {
 					return nil, err
@@ -286,7 +286,7 @@ func TestRecoveryFileErrors(t *testing.T) {
 				return smail.SendResult{Outcome: smail.Unconfirmed, Reason: "submission unconfirmed"}
 			}}
 			request := testRequest(snapshot, messages, mailer)
-			request.Open = open
+			request.CreateRecovery = createRecovery
 			result, _ := completed(t, Run(request))
 			if result.Error == "" || result.RecoveryStatus != test.want || result.RecoveryPath == "" {
 				t.Fatalf("missing file error: %+v", result)

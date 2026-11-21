@@ -212,7 +212,7 @@ func (m *Model) View() tea.View {
 		body := m.body()
 		if m.help {
 			body = m.helpView()
-		} else if m.report.exporting {
+		} else if m.report.isExportOpen {
 			body = m.exportView()
 		}
 		width, height := m.bodyWidth(), m.bodyHeight()
@@ -411,14 +411,14 @@ func (m *Model) previewView() string {
 }
 
 func (m *Model) browserView(b *browser, listTitle, detailTitle, empty string) string {
-	listHeading := m.paneHeading(listTitle, !m.focus)
-	detailHeading := m.paneHeading(detailTitle, m.focus)
+	listHeading := m.paneHeading(listTitle, !m.isDetailFocused)
+	detailHeading := m.paneHeading(detailTitle, m.isDetailFocused)
 	list := empty
 	if len(b.indices) > 0 {
 		list = b.table.View()
 	}
 	if !m.split() {
-		if m.focus {
+		if m.isDetailFocused {
 			return detailHeading + "\n" + m.detail.View()
 		}
 		return listHeading + "\n" + list
@@ -580,7 +580,7 @@ func (m *Model) exportView() string {
 			lipgloss.Wrap(reports.CleanText(m.report.exportPath), m.bodyWidth(), "")
 	}
 	status := m.report.exportNotice
-	if m.report.writing {
+	if m.report.isWritingExport {
 		status = "Saving report…"
 	}
 	lines := []string{
@@ -598,11 +598,11 @@ func (m *Model) footer() string {
 	if m.help {
 		return "Esc Close help"
 	}
-	if m.report.exporting {
+	if m.report.isExportOpen {
 		if m.report.exportPath != "" {
 			return "Enter Done  ·  Esc Back"
 		}
-		if m.report.writing {
+		if m.report.isWritingExport {
 			return "Saving export…"
 		}
 		return "Enter Save CSV  ·  Esc Cancel"
@@ -652,7 +652,7 @@ func (m *Model) bindings(showIcons bool) []key.Binding {
 		pane := "Switch pane"
 		if !m.split() {
 			pane = "Preview"
-			if m.focus {
+			if m.isDetailFocused {
 				pane = "Messages"
 			}
 		}
@@ -680,7 +680,7 @@ func (m *Model) bindings(showIcons bool) []key.Binding {
 		}
 		movement := shortcut("←/→", "≡ ", "Filter")
 		pane := "View"
-		if m.focus {
+		if m.isDetailFocused {
 			movement = scroll
 			pane = "Rows"
 		}
@@ -691,7 +691,7 @@ func (m *Model) bindings(showIcons bool) []key.Binding {
 }
 
 func (m *Model) bottomLine() string {
-	if m.help || m.searching || m.report.exporting {
+	if m.help || m.searching || m.report.isExportOpen {
 		return ""
 	}
 	if m.screen == sendingScreen {

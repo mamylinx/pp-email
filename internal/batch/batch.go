@@ -25,7 +25,7 @@ type RecoveryFile interface {
 	Truncate(size int64) error
 }
 
-type OpenRecovery func(directory string) (RecoveryFile, error)
+type CreateRecoveryFunc func(directory string) (RecoveryFile, error)
 
 func CreateRecovery(directory string) (RecoveryFile, error) {
 	return os.CreateTemp(directory, "pp-email-failures-*.csv")
@@ -126,13 +126,13 @@ type Event struct {
 }
 
 type Request struct {
-	Account  string
-	Snapshot csvdata.Snapshot
-	Messages []csvdata.Message
-	Adapter  Adapter
-	Open     OpenRecovery
-	Stop     <-chan struct{}
-	Limits   *sendlimits.Limits
+	Account        string
+	Snapshot       csvdata.Snapshot
+	Messages       []csvdata.Message
+	Adapter        Adapter
+	CreateRecovery CreateRecoveryFunc
+	Stop           <-chan struct{}
+	Limits         *sendlimits.Limits
 }
 
 func Run(request Request) <-chan Event {
@@ -179,7 +179,7 @@ func run(request Request, events chan<- Event) (result Result) {
 		}
 	}()
 
-	file, err := request.Open(filepath.Dir(request.Snapshot.Path))
+	file, err := request.CreateRecovery(filepath.Dir(request.Snapshot.Path))
 	if err != nil {
 		result.Error = "could not create a recovery CSV beside the source file"
 		return result
@@ -242,7 +242,7 @@ func (s *sender) sendAll() {
 			s.result.Stopped = true
 			break
 		}
-		if s.session.Pacing() {
+		if s.session.NeedsDelay() {
 			s.events <- Event{Progress: Progress{
 				Counts: s.result.Counts,
 				Line:   message.Record.Line,

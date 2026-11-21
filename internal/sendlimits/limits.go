@@ -190,8 +190,8 @@ func (s *Session) WaitAndReserve(stop <-chan struct{}) error {
 	return nil
 }
 
-// Pacing reports whether the next reservation is scheduled for the future.
-func (s *Session) Pacing() bool {
+// NeedsDelay reports whether the next reservation is scheduled for the future.
+func (s *Session) NeedsDelay() bool {
 	return s != nil && s.nextStart.After(s.limits.now())
 }
 

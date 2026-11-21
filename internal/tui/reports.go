@@ -38,23 +38,23 @@ type exportedMsg struct {
 }
 
 type reportView struct {
-	history      browser
-	rows         browser
-	summaries    []reports.Summary
-	loading      bool
-	pendingID    string
-	historyNote  string
-	latest       reports.Report
-	current      reports.Report
-	saving       bool
-	saveErr      error
-	filter       int
-	runInfo      bool
-	exporting    bool
-	writing      bool
-	quitAfterIO  bool
-	exportNotice string
-	exportPath   string
+	history         browser
+	rows            browser
+	summaries       []reports.Summary
+	loading         bool
+	pendingID       string
+	historyNote     string
+	latest          reports.Report
+	current         reports.Report
+	saving          bool
+	saveErr         error
+	filter          int
+	runInfo         bool
+	isExportOpen    bool
+	isWritingExport bool
+	quitAfterIO     bool
+	exportNotice    string
+	exportPath      string
 }
 
 type outcomeFilter struct {
@@ -100,7 +100,7 @@ func (m *Model) finishRun(result batch.Result) tea.Cmd {
 }
 
 func (m *Model) resetDraft() {
-	m.draft, m.draftFocus, m.choice = accountScreen, false, 0
+	m.draft, m.wasDraftDetailFocused, m.choice = accountScreen, false, 0
 	m.account, m.err = "", ""
 	m.messages = nil
 	m.snapshot = csvdata.Snapshot{}
@@ -115,7 +115,7 @@ func (m *Model) receiveSave(msg reportSavedMsg) tea.Cmd {
 		m.includeLatest()
 		m.refreshHistory()
 	}
-	if m.report.quitAfterIO && !m.report.writing {
+	if m.report.quitAfterIO && !m.report.isWritingExport {
 		m.report.quitAfterIO = false
 		if msg.err == nil {
 			return tea.Quit
@@ -126,9 +126,9 @@ func (m *Model) receiveSave(msg reportSavedMsg) tea.Cmd {
 
 func (m *Model) openHistory() tea.Cmd {
 	if m.screen != historyScreen && m.screen != resultScreen {
-		m.draft, m.draftFocus = m.screen, m.focus
+		m.draft, m.wasDraftDetailFocused = m.screen, m.isDetailFocused
 	}
-	m.screen, m.focus, m.report.runInfo = historyScreen, false, false
+	m.screen, m.isDetailFocused, m.report.runInfo = historyScreen, false, false
 	m.resize(m.width, m.height)
 	return m.loadHistory()
 }
@@ -232,7 +232,7 @@ func (m *Model) receiveReport(msg reportLoadedMsg) {
 }
 
 func (m *Model) showReport(report reports.Report) {
-	m.screen, m.focus, m.report.runInfo = resultScreen, false, false
+	m.screen, m.isDetailFocused, m.report.runInfo = resultScreen, false, false
 	m.searching = false
 	m.report.current, m.report.filter, m.report.exportNotice = report, 0, ""
 	delete(m.queries, resultScreen)
@@ -286,20 +286,20 @@ func (m *Model) updateReport(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		if m.report.runInfo {
-			m.report.runInfo, m.focus = false, false
+			m.report.runInfo, m.isDetailFocused = false, false
 			m.resize(m.width, m.height)
 			m.selectReportRow()
-		} else if m.focus {
-			m.focus = false
+		} else if m.isDetailFocused {
+			m.isDetailFocused = false
 		} else {
 			return m.openHistory()
 		}
 	case "i":
-		m.report.runInfo, m.focus = true, true
+		m.report.runInfo, m.isDetailFocused = true, true
 		m.resize(m.width, m.height)
 		m.setDetail(runDetail(m.report.current))
 	case "left", "right":
-		if !m.focus {
+		if !m.isDetailFocused {
 			direction := 1
 			if msg.String() == "left" {
 				direction = -1
@@ -320,7 +320,7 @@ func (m *Model) updateReport(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) beginExport() tea.Cmd {
-	m.report.exporting = true
+	m.report.isExportOpen = true
 	m.report.exportNotice, m.report.exportPath = "", ""
 	run := m.report.current
 	m.input.SetValue(filepath.Join(m.directory, "pp-email-report-"+run.ID+".csv"))
@@ -328,7 +328,7 @@ func (m *Model) beginExport() tea.Cmd {
 }
 
 func (m *Model) updateExport(msg tea.Msg) tea.Cmd {
-	if m.report.writing {
+	if m.report.isWritingExport {
 		return nil
 	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
@@ -351,7 +351,7 @@ func (m *Model) updateExport(msg tea.Msg) tea.Cmd {
 			}
 			path := filepath.Clean(value)
 			report := m.report.current
-			m.report.writing = true
+			m.report.isWritingExport = true
 			return func() tea.Msg { return exportedMsg{path: path, err: reports.Export(path, report)} }
 		}
 	}
@@ -362,7 +362,7 @@ func (m *Model) updateExport(msg tea.Msg) tea.Cmd {
 }
 
 func (m *Model) receiveExport(msg exportedMsg) tea.Cmd {
-	m.report.writing = false
+	m.report.isWritingExport = false
 	switch {
 	case errors.Is(msg.err, os.ErrExist):
 		m.report.exportNotice = "A file already exists there. Choose a different name."
@@ -381,7 +381,7 @@ func (m *Model) receiveExport(msg exportedMsg) tea.Cmd {
 }
 
 func (m *Model) cancelExport() {
-	m.report.exporting = false
+	m.report.isExportOpen = false
 	m.report.exportNotice, m.report.exportPath = "", ""
 }
 

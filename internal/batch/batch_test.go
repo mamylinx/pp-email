@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -76,6 +77,21 @@ func completed(t *testing.T, events <-chan Event) (Result, []int) {
 	}
 	t.Fatal("run ended without a result")
 	return Result{}, nil
+}
+
+func TestRowResultUnmarshalJSON(t *testing.T) {
+	var row RowResult
+	if err := json.Unmarshal([]byte(`{"line":2,"outcome":0,"diagnostic":"stopped"}`), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row != (RowResult{Line: 2, Outcome: smail.Unattempted, Reason: "stopped"}) {
+		t.Fatalf("unexpected row: %+v", row)
+	}
+	for _, input := range []string{`{"line":2}`, `{"line":2,"outcome":null}`} {
+		if err := json.Unmarshal([]byte(input), &row); err == nil {
+			t.Errorf("accepted row without an outcome: %s", input)
+		}
+	}
 }
 
 func TestPacingWaitCanBeStopped(t *testing.T) {

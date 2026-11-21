@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -77,6 +78,23 @@ type RowResult struct {
 	Line    int           `json:"line"`
 	Outcome smail.Outcome `json:"outcome"`
 	Reason  string        `json:"diagnostic,omitempty"`
+}
+
+// UnmarshalJSON requires an explicit outcome because zero means unattempted.
+func (r *RowResult) UnmarshalJSON(data []byte) error {
+	var row struct {
+		Line    int            `json:"line"`
+		Outcome *smail.Outcome `json:"outcome"`
+		Reason  string         `json:"diagnostic,omitempty"`
+	}
+	if err := json.Unmarshal(data, &row); err != nil {
+		return err
+	}
+	if row.Outcome == nil {
+		return errors.New("missing row outcome")
+	}
+	*r = RowResult{Line: row.Line, Outcome: *row.Outcome, Reason: row.Reason}
+	return nil
 }
 
 // Rows combines the attempted prefix recorded by Run with the original source order.

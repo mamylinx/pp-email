@@ -184,6 +184,9 @@ func (s *Session) WaitAndReserve(stop <-chan struct{}) error {
 	if s == nil {
 		return nil
 	}
+	if s.lock == nil {
+		return os.ErrClosed
+	}
 	if err := s.limits.wait(s.nextStart.Sub(s.limits.now()), stop); err != nil {
 		return err
 	}
@@ -200,13 +203,13 @@ func (s *Session) WaitAndReserve(stop <-chan struct{}) error {
 
 // NeedsDelay reports whether the next reservation is scheduled for the future.
 func (s *Session) NeedsDelay() bool {
-	return s != nil && s.nextStart.After(s.limits.now())
+	return s != nil && s.lock != nil && s.nextStart.After(s.limits.now())
 }
 
 // MarkStarted records the start just before the SMTP invocation. The next
 // reservation or Close persists it. Until then the reservation counts on disk.
 func (s *Session) MarkStarted() {
-	if s == nil {
+	if s == nil || s.lock == nil {
 		return
 	}
 	now := s.limits.now()
@@ -217,9 +220,11 @@ func (s *Session) MarkStarted() {
 }
 
 func (s *Session) Close() error {
-	if s == nil {
+	if s == nil || s.lock == nil {
 		return nil
 	}
+	lock := s.lock
+	s.lock = nil
 	var err error
 	if s.dirty {
 		if s.reserved {
@@ -228,7 +233,7 @@ func (s *Session) Close() error {
 		}
 		err = writeLedger(s.path, s.history)
 	}
-	return errors.Join(err, s.lock.Close())
+	return errors.Join(err, lock.Close())
 }
 
 func waitFor(delay time.Duration, stop <-chan struct{}) error {

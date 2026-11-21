@@ -209,3 +209,41 @@ func TestPacingWithinSessionAndPendingReservation(t *testing.T) {
 		t.Fatalf("pacing cancellation: %v", err)
 	}
 }
+
+func TestRepeatedClosePreservesLaterAttempts(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "limits.json")
+	writeConfig(t, path, exampleConfig)
+	limits, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits.wait = func(time.Duration, <-chan struct{}) error { return nil }
+	send := func() *Session {
+		t.Helper()
+		s, err := limits.Begin("work", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.WaitAndReserve(nil); err != nil {
+			t.Fatal(err)
+		}
+		s.MarkStarted()
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	first := send()
+	send()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.WaitAndReserve(nil); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("reserve after close: got %v, want closed session error", err)
+	}
+	status, err := limits.Status("work")
+	if err != nil || status.Remaining != 0 {
+		t.Fatalf("budget after repeated close: %+v, %v", status, err)
+	}
+}

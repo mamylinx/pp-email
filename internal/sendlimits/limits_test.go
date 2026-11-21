@@ -55,6 +55,24 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadSymlink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "limits.json")
+	target := filepath.Join(dir, "policy.json")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("broken limits symlink: got %v, want a missing target error", err)
+	}
+	t.Setenv("XDG_STATE_HOME", dir)
+	writeConfig(t, target, exampleConfig)
+	limits, err := Load(path)
+	if err != nil || limits == nil {
+		t.Fatalf("valid limits symlink: got %v, %v", limits, err)
+	}
+}
+
 func TestPacingAndRollingBudgetAcrossSessions(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "limits.json")

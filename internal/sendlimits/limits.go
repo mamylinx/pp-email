@@ -38,7 +38,15 @@ func Load(path string) (*Limits, error) {
 	var policies map[string]Policy
 	if err := readJSON(path, &policies); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			info, statErr := os.Lstat(path)
+			switch {
+			case errors.Is(statErr, os.ErrNotExist):
+				return nil, nil
+			case statErr != nil:
+				return nil, statErr
+			case info.Mode()&os.ModeSymlink != 0:
+				return nil, fmt.Errorf("resolve send limits symlink: %w", err)
+			}
 		}
 		return nil, err
 	}

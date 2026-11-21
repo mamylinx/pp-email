@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,6 +22,9 @@ import (
 )
 
 const version = 1
+
+// ErrDirectorySync indicates that the file exists but its directory could not be synced.
+var ErrDirectorySync = errors.New("report created but directory sync failed")
 
 type Status string
 
@@ -301,8 +305,15 @@ func publish(path string, write func(io.Writer) error) error {
 	if err := errors.Join(writeErr, file.Close()); err != nil {
 		return err
 	}
-	if err := os.Link(file.Name(), path); err != nil {
+	return linkAndSync(file.Name(), path, dir)
+}
+
+func linkAndSync(source, path string, dir *os.File) error {
+	if err := os.Link(source, path); err != nil {
 		return err
 	}
-	return dir.Sync()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("%w: %w", ErrDirectorySync, err)
+	}
+	return nil
 }

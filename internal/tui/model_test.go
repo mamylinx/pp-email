@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -420,6 +421,52 @@ func advance(t *testing.T, model *Model, key tea.KeyPressMsg) {
 		t.Fatalf("keypress %q did not start an operation", key.String())
 	}
 	model.Update(cmd())
+}
+
+func TestQuitWhileReportWritesArePending(t *testing.T) {
+	failure := errors.New("write failed")
+	for _, tc := range []struct {
+		name          string
+		first, second tea.Msg
+		wantQuit      bool
+	}{
+		{"save fails first", reportSavedMsg{failure}, exportedMsg{path: "out.csv"}, false},
+		{"export fails first", exportedMsg{err: failure}, reportSavedMsg{}, false},
+		{"save fails last", exportedMsg{path: "out.csv"}, reportSavedMsg{failure}, false},
+		{"export fails last", reportSavedMsg{}, exportedMsg{err: failure}, false},
+		{"both succeed", reportSavedMsg{}, exportedMsg{path: "out.csv"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &Model{report: reportView{saving: true, isWritingExport: true}}
+			if _, cmd := m.Update(StopMsg{}); cmd != nil {
+				t.Fatal("quit before either write finished")
+			}
+			if _, cmd := m.Update(tc.first); cmd != nil {
+				t.Fatal("quit before both writes finished")
+			}
+			_, cmd := m.Update(tc.second)
+			if (cmd != nil) != tc.wantQuit {
+				t.Fatalf("got quit command %t, want %t", cmd != nil, tc.wantQuit)
+			}
+			if cmd != nil {
+				if _, ok := cmd().(tea.QuitMsg); !ok {
+					t.Fatal("expected a quit message")
+				}
+			}
+		})
+	}
+}
+
+func TestExportDirectorySyncFailure(t *testing.T) {
+	m := New(testMailer{}, t.TempDir(), nil)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.screen = resultScreen
+	m.beginExport()
+	m.Update(exportedMsg{path: "out.csv", err: reports.ErrDirectorySync})
+	requireView(t, m, "directory could not be synced", "out.csv", "Enter Done")
+	if _, cmd := m.Update(press(tea.KeyEnter)); cmd != nil || m.report.isExportOpen {
+		t.Fatal("expected Enter to close the export notice")
+	}
 }
 
 func TestReportCanBeExportedWhenHistoryCannotBeSaved(t *testing.T) {

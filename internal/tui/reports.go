@@ -115,13 +115,7 @@ func (m *Model) receiveSave(msg reportSavedMsg) tea.Cmd {
 		m.includeLatest()
 		m.refreshHistory()
 	}
-	if m.report.quitAfterIO && !m.report.isWritingExport {
-		m.report.quitAfterIO = false
-		if msg.err == nil {
-			return tea.Quit
-		}
-	}
-	return nil
+	return m.report.finishPendingQuit(msg.err)
 }
 
 func (m *Model) openHistory() tea.Cmd {
@@ -364,18 +358,27 @@ func (m *Model) updateExport(msg tea.Msg) tea.Cmd {
 func (m *Model) receiveExport(msg exportedMsg) tea.Cmd {
 	m.report.isWritingExport = false
 	switch {
+	case errors.Is(msg.err, reports.ErrDirectorySync):
+		m.report.exportPath = msg.path
+		m.report.exportNotice = "File created, but the directory could not be synced. Check the file at"
 	case errors.Is(msg.err, os.ErrExist):
 		m.report.exportNotice = "A file already exists there. Choose a different name."
 	case msg.err != nil:
 		m.report.exportNotice = "Could not export report. " + msg.err.Error()
 	default:
 		m.report.exportPath = msg.path
+		m.report.exportNotice = ""
 	}
-	if m.report.quitAfterIO && !m.report.saving {
-		m.report.quitAfterIO = false
-		if msg.err == nil {
-			return tea.Quit
-		}
+	return m.report.finishPendingQuit(msg.err)
+}
+
+func (r *reportView) finishPendingQuit(err error) tea.Cmd {
+	if err != nil {
+		r.quitAfterIO = false
+	}
+	if r.quitAfterIO && !r.saving && !r.isWritingExport {
+		r.quitAfterIO = false
+		return tea.Quit
 	}
 	return nil
 }

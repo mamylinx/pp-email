@@ -16,6 +16,31 @@ import (
 	"pp_email/internal/smail"
 )
 
+func TestLinkAndSyncDirectoryFailure(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "temp")
+	path := filepath.Join(dir, "export.csv")
+	if err := os.WriteFile(source, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Linking uses the paths. A closed directory handle fails only at sync.
+	handle, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = linkAndSync(source, path, handle)
+	if !errors.Is(err, ErrDirectorySync) || !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("directory sync failure: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "report" {
+		t.Fatalf("published file: got %q, %v", data, err)
+	}
+}
+
 func TestReportStoreAndSpreadsheetExport(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

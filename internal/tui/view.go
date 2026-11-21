@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -537,6 +538,8 @@ func (m *Model) resultView() string {
 		switch {
 		case run.ID == m.report.latest.ID && m.report.saving:
 			note = "Saving report…"
+		case run.ID == m.report.latest.ID && errors.Is(m.report.saveErr, reports.ErrDirectorySync):
+			note = "History file created, but the directory could not be synced. Press E to export."
 		case run.ID == m.report.latest.ID && m.report.saveErr != nil:
 			note = "Could not save to history. Press E to export this run."
 		case len(run.UnrecordedLines) > 0:
@@ -576,8 +579,11 @@ func recoveryLines(report reports.Report, width int) [2]string {
 func (m *Model) exportView() string {
 	title := m.styles.title.Render(iconExport + "Export run as CSV")
 	if m.report.exportPath != "" {
-		return title + "\n\n" + iconAccept + "Report saved to\n" +
-			lipgloss.Wrap(reports.CleanText(m.report.exportPath), m.bodyWidth(), "")
+		status := m.report.exportNotice
+		if status == "" {
+			status = iconAccept + "Report saved to"
+		}
+		return title + "\n\n" + lipgloss.Wrap(status+"\n"+reports.CleanText(m.report.exportPath), m.bodyWidth(), "")
 	}
 	status := m.report.exportNotice
 	if m.report.isWritingExport {
@@ -698,6 +704,9 @@ func (m *Model) bottomLine() string {
 		return "? Help"
 	}
 	if m.report.saveErr != nil && m.screen != resultScreen {
+		if errors.Is(m.report.saveErr, reports.ErrDirectorySync) {
+			return "History file created, but the directory could not be synced."
+		}
 		return "Latest run has an unsaved report. Open Reports to export."
 	}
 	hint := "? Help  ·  Q Quit"

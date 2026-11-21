@@ -107,34 +107,41 @@ type Event struct {
 	Result   *Result
 }
 
-func Run(account string, snapshot csvdata.Snapshot, messages []csvdata.Message,
-	adapter Adapter, open OpenRecovery, stop <-chan struct{}, limits *sendlimits.Limits,
-) <-chan Event {
+type Request struct {
+	Account  string
+	Snapshot csvdata.Snapshot
+	Messages []csvdata.Message
+	Adapter  Adapter
+	Open     OpenRecovery
+	Stop     <-chan struct{}
+	Limits   *sendlimits.Limits
+}
+
+func Run(request Request) <-chan Event {
 	events := make(chan Event, 1)
 	go func() {
 		defer close(events)
-		result := run(account, snapshot, messages, adapter, open, stop, limits, events)
+		result := run(request, events)
 		events <- Event{Result: &result}
 	}()
 	return events
 }
 
-func run(account string, snapshot csvdata.Snapshot, messages []csvdata.Message,
-	adapter Adapter, open OpenRecovery, stop <-chan struct{}, limits *sendlimits.Limits, events chan<- Event,
-) (result Result) {
-	result.Unattempted = len(messages)
+func run(request Request, events chan<- Event) (result Result) {
+	result.Unattempted = len(request.Messages)
 	defer func() {
 		if result.Unattempted > 0 {
-			result.FirstUnattemptedLine = messages[len(messages)-result.Unattempted].Record.Line
+			index := len(request.Messages) - result.Unattempted
+			result.FirstUnattemptedLine = request.Messages[index].Record.Line
 		}
 	}()
 
-	if stopping(stop) || len(messages) == 0 {
-		result.Stopped = stopping(stop)
+	if stopping(request.Stop) || len(request.Messages) == 0 {
+		result.Stopped = stopping(request.Stop)
 		return result
 	}
-	endpoint, err := adapter.CheckAccount(account)
-	if stopping(stop) {
+	endpoint, err := request.Adapter.CheckAccount(request.Account)
+	if stopping(request.Stop) {
 		result.Stopped = true
 		return result
 	}
@@ -143,7 +150,7 @@ func run(account string, snapshot csvdata.Snapshot, messages []csvdata.Message,
 		return result
 	}
 
-	session, err := limits.Begin(account, len(messages))
+	session, err := request.Limits.Begin(request.Account, len(request.Messages))
 	if err != nil {
 		result.Error = err.Error()
 		return result
@@ -154,95 +161,129 @@ func run(account string, snapshot csvdata.Snapshot, messages []csvdata.Message,
 		}
 	}()
 
-	file, err := open(filepath.Dir(snapshot.Path))
+	file, err := request.Open(filepath.Dir(request.Snapshot.Path))
 	if err != nil {
 		result.Error = "could not create a recovery CSV beside the source file"
 		return result
 	}
 	result.RecoveryPath = file.Name()
 	result.RecoveryStatus = RecoveryComplete
-	defer func() {
-		if err := file.Close(); err != nil {
-			result.RecoveryStatus = RecoveryUnverified
-			addError(&result, "could not close the recovery CSV")
-		}
-		if result.RecoveryStatus == RecoveryComplete && result.Unconfirmed == 0 {
-			if err := os.Remove(file.Name()); err != nil {
-				addError(&result, "could not remove the header-only recovery CSV")
-				return
-			}
-			result.RecoveryPath = ""
-			result.RecoveryStatus = ""
-		}
-	}()
+	defer closeRecovery(file, &result)
 
-	offset, err := writeAndSync(file, snapshot.WriteHeader)
+	offset, err := writeAndSync(file, request.Snapshot.WriteHeader)
 	if err != nil {
 		result.Error = "could not write the recovery CSV header"
 		result.RecoveryStatus = RecoveryUnverified
 		return result
 	}
 
-	for _, message := range messages {
-		if stopping(stop) {
-			result.Stopped = true
-			break
-		}
-		if session.Pacing() {
-			events <- Event{Progress: Progress{Counts: result.Counts, Line: message.Record.Line, Phase: WaitingForLimit}}
-		}
-		if err := session.WaitAndReserve(stop); err != nil {
-			if errors.Is(err, sendlimits.ErrStopped) {
-				result.Stopped = true
-			} else {
-				result.Error = err.Error()
-			}
-			break
-		}
-		if stopping(stop) {
-			result.Stopped = true
-			break
-		}
-		events <- Event{Progress: Progress{Counts: result.Counts, Line: message.Record.Line, Phase: Submitting}}
-		if stopping(stop) {
-			result.Stopped = true
-			break
-		}
-		session.MarkStarted()
-		outcome := adapter.Send(account, endpoint, message)
-		switch outcome.Outcome {
-		case smail.Accepted:
-			result.Accepted++
-			result.Unattempted--
-		case smail.Unconfirmed:
-			result.Unconfirmed++
-			result.Unattempted--
-			result.UnconfirmedRows = append(result.UnconfirmedRows, Issue{
-				Line: message.Record.Line, Reason: outcome.Reason,
-			})
-			next, err := writeAndSync(file, func(w io.Writer) error {
-				return snapshot.WriteRecord(w, message.Record)
-			})
-			if err != nil {
-				result.UnrecordedLines = append(result.UnrecordedLines, message.Record.Line)
-				result.Error = "could not save a row to the recovery CSV"
-				result.RecoveryStatus = RecoveryPrefix
-				if file.Truncate(offset) != nil || file.Sync() != nil {
-					result.RecoveryStatus = RecoveryUnverified
-				}
-				return result
-			}
-			offset = next
-		}
-		if outcome.Stop || outcome.Outcome == smail.Unattempted {
-			result.Error = outcome.Reason
-			break
-		}
+	sender := sender{
+		request:  request,
+		endpoint: endpoint,
+		session:  session,
+		file:     file,
+		offset:   offset,
+		result:   &result,
+		events:   events,
 	}
-	if stopping(stop) {
+	sender.sendAll()
+	if stopping(request.Stop) {
 		result.Stopped = true
 	}
 	return result
+}
+
+func closeRecovery(file RecoveryFile, result *Result) {
+	if err := file.Close(); err != nil {
+		result.RecoveryStatus = RecoveryUnverified
+		addError(result, "could not close the recovery CSV")
+	}
+	if result.RecoveryStatus == RecoveryComplete && result.Unconfirmed == 0 {
+		if err := os.Remove(file.Name()); err != nil {
+			addError(result, "could not remove the header-only recovery CSV")
+			return
+		}
+		result.RecoveryPath = ""
+		result.RecoveryStatus = ""
+	}
+}
+
+type sender struct {
+	request  Request
+	endpoint smail.Endpoint
+	session  *sendlimits.Session
+	file     RecoveryFile
+	offset   int64
+	result   *Result
+	events   chan<- Event
+}
+
+func (s *sender) sendAll() {
+	for _, message := range s.request.Messages {
+		if stopping(s.request.Stop) {
+			s.result.Stopped = true
+			break
+		}
+		if s.session.Pacing() {
+			s.events <- Event{Progress: Progress{
+				Counts: s.result.Counts,
+				Line:   message.Record.Line,
+				Phase:  WaitingForLimit,
+			}}
+		}
+		if err := s.session.WaitAndReserve(s.request.Stop); err != nil {
+			if errors.Is(err, sendlimits.ErrStopped) {
+				s.result.Stopped = true
+			} else {
+				s.result.Error = err.Error()
+			}
+			break
+		}
+		if stopping(s.request.Stop) {
+			s.result.Stopped = true
+			break
+		}
+		s.events <- Event{Progress: Progress{
+			Counts: s.result.Counts,
+			Line:   message.Record.Line,
+			Phase:  Submitting,
+		}}
+		if stopping(s.request.Stop) {
+			s.result.Stopped = true
+			break
+		}
+		s.session.MarkStarted()
+		outcome := s.request.Adapter.Send(s.request.Account, s.endpoint, message)
+		switch outcome.Outcome {
+		case smail.Accepted:
+			s.result.Accepted++
+			s.result.Unattempted--
+		case smail.Unconfirmed:
+			s.result.Unconfirmed++
+			s.result.Unattempted--
+			s.result.UnconfirmedRows = append(s.result.UnconfirmedRows, Issue{
+				Line:   message.Record.Line,
+				Reason: outcome.Reason,
+			})
+			next, err := writeAndSync(s.file, func(w io.Writer) error {
+				return s.request.Snapshot.WriteRecord(w, message.Record)
+			})
+			if err != nil {
+				s.result.UnrecordedLines = append(s.result.UnrecordedLines, message.Record.Line)
+				s.result.Error = "could not save a row to the recovery CSV"
+				s.result.RecoveryStatus = RecoveryPrefix
+				if s.file.Truncate(s.offset) != nil || s.file.Sync() != nil {
+					s.result.RecoveryStatus = RecoveryUnverified
+				}
+				return
+			}
+			s.offset = next
+		}
+		if outcome.Stop || outcome.Outcome == smail.Unattempted {
+			s.result.Error = outcome.Reason
+			break
+		}
+	}
 }
 
 func writeAndSync(file RecoveryFile, write func(io.Writer) error) (int64, error) {

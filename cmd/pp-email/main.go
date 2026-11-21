@@ -30,7 +30,7 @@ func run() error {
 	}
 	directory, err := os.Getwd()
 	if err != nil {
-		return errors.New("could not open the current directory")
+		return fmt.Errorf("get working directory: %w", err)
 	}
 
 	configDir, err := os.UserConfigDir()
@@ -61,7 +61,7 @@ func run() error {
 		}
 	}()
 	if _, err := program.Run(); err != nil {
-		return errors.New("could not start or run the terminal interface")
+		return fmt.Errorf("run terminal interface: %w", err)
 	}
 	return nil
 }

@@ -25,7 +25,9 @@ func TestAccountListing(t *testing.T) {
 		if !slices.Equal(call.args, want) || call.body != "" || call.timeout != probeTimeout {
 			t.Fatalf("unexpected listing call: %+v", call)
 		}
-		return observation{success: true, stdout: "account first {\n  set password=secret\n}\n\naccount null {\n}\naccount second {\n}\n"}
+		output := "account first {\n  set password=secret\n}\n\n" +
+			"account null {\n}\naccount second {\n}\n"
+		return observation{success: true, stdout: output}
 	}
 	names, err := adapter.ListAccounts()
 	if err != nil || !slices.Equal(names, []string{"first", "second"}) {
@@ -51,7 +53,7 @@ func TestProbeAndSendContract(t *testing.T) {
 	adapter.launch = func(call invocation) observation {
 		calls++
 		tag := envValue(call.env, "PP_EMAIL_PROBE_TAG")
-		if len(tag) != 32 || call.path != "/fixture/s-nail" {
+		if tag == "" || call.path != "/fixture/s-nail" {
 			t.Fatalf("missing tagged invocation: %+v", call)
 		}
 		if calls == 1 {
@@ -102,7 +104,11 @@ func TestEndpointRestrictions(t *testing.T) {
 			t.Errorf("unexpected URL result for %q: %v", raw, err)
 		}
 	}
-	for _, host := range []string{"localhost.", "127.0.0.1", "0.0.0.0", "::1", "::ffff:198.51.100.10", "mixed.example.invalid"} {
+	hosts := []string{
+		"localhost.", "127.0.0.1", "0.0.0.0", "::1",
+		"::ffff:198.51.100.10", "mixed.example.invalid",
+	}
+	for _, host := range hosts {
 		if err := adapter.checkRemoteHost(host); err == nil {
 			t.Errorf("allowed local host %q", host)
 		}
@@ -123,15 +129,60 @@ func TestOutcomes(t *testing.T) {
 		result Outcome
 		stop   bool
 	}{
-		{"start error", observation{}, Unattempted, true},
-		{"guard", observation{started: true, exitCode: 71, stdout: "tag BLOCKED\n"}, Unattempted, true},
-		{"success", observation{started: true, success: true, stdout: "tag READY\n"}, Accepted, false},
-		{"nonzero after ready", observation{started: true, exitCode: 71, stdout: "tag READY\n"}, Unconfirmed, false},
-		{"timeout after ready", observation{started: true, timedOut: true, stdout: "tag READY\n"}, Unconfirmed, false},
-		{"signal after ready", observation{started: true, signalled: true, stdout: "tag READY\n"}, Unconfirmed, false},
-		{"no marker", observation{started: true, success: true, stdout: "secret\n"}, Unconfirmed, true},
-		{"conflicting markers", observation{started: true, exitCode: 71, stdout: "tag BLOCKED\ntag READY\n"}, Unconfirmed, true},
-		{"repeated marker", observation{started: true, exitCode: 71, stdout: "tag BLOCKED\ntag BLOCKED\n"}, Unconfirmed, true},
+		{
+			name:   "start error",
+			obs:    observation{},
+			result: Unattempted,
+			stop:   true,
+		},
+		{
+			name:   "guard",
+			obs:    observation{started: true, exitCode: 71, stdout: "tag BLOCKED\n"},
+			result: Unattempted,
+			stop:   true,
+		},
+		{
+			name:   "success",
+			obs:    observation{started: true, success: true, stdout: "tag READY\n"},
+			result: Accepted,
+			stop:   false,
+		},
+		{
+			name:   "nonzero after ready",
+			obs:    observation{started: true, exitCode: 71, stdout: "tag READY\n"},
+			result: Unconfirmed,
+			stop:   false,
+		},
+		{
+			name:   "timeout after ready",
+			obs:    observation{started: true, timedOut: true, stdout: "tag READY\n"},
+			result: Unconfirmed,
+			stop:   false,
+		},
+		{
+			name:   "signal after ready",
+			obs:    observation{started: true, signalled: true, stdout: "tag READY\n"},
+			result: Unconfirmed,
+			stop:   false,
+		},
+		{
+			name:   "no marker",
+			obs:    observation{started: true, success: true, stdout: "secret\n"},
+			result: Unconfirmed,
+			stop:   true,
+		},
+		{
+			name:   "conflicting markers",
+			obs:    observation{started: true, exitCode: 71, stdout: "tag BLOCKED\ntag READY\n"},
+			result: Unconfirmed,
+			stop:   true,
+		},
+		{
+			name:   "repeated marker",
+			obs:    observation{started: true, exitCode: 71, stdout: "tag BLOCKED\ntag BLOCKED\n"},
+			result: Unconfirmed,
+			stop:   true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result := classify(test.obs, "tag")
@@ -240,7 +291,8 @@ endif
 		t.Fatal(err)
 	}
 	csvPath := filepath.Join(directory, "messages.csv")
-	source := "Name,Address,Subject,Body\n" + `Zoë,recipient@example.invalid,Dry run,~s literal\n.\nfirst\r\nsecond\tcolumn\vvertical\rreturn\n` + "\n"
+	source := "Name,Address,Subject,Body\n" +
+		`Zoë,recipient@example.invalid,Dry run,~s literal\n.\nfirst\r\nsecond\tcolumn\vvertical\rreturn\n` + "\n"
 	if err := os.WriteFile(csvPath, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}

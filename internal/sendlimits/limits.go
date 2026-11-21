@@ -46,8 +46,14 @@ func Load(path string) (*Limits, error) {
 		return nil, errors.New("expected an object keyed by s-nail account name")
 	}
 	for account, policy := range policies {
-		if account == "" || policy.MessagesPerMinute <= 0 || policy.MaxPer24Hours <= 0 {
-			return nil, fmt.Errorf("account %q needs a name and positive messages_per_minute and max_per_24_hours values", account)
+		validPolicy := account != "" &&
+			policy.MessagesPerMinute > 0 &&
+			policy.MaxPer24Hours > 0
+		if !validPolicy {
+			return nil, fmt.Errorf(
+				"account %q needs a name and positive messages_per_minute and max_per_24_hours values",
+				account,
+			)
 		}
 	}
 	if len(policies) == 0 {
@@ -261,7 +267,10 @@ func readLedger(path string) (ledger, error) {
 		}
 		return ledger{}, fmt.Errorf("read send budget ledger: %w", err)
 	}
-	if history == nil || history.Attempts == nil || history.Pending && len(history.Attempts) == 0 {
+	if history == nil || history.Attempts == nil {
+		return ledger{}, fmt.Errorf("invalid send budget ledger at %s", path)
+	}
+	if history.Pending && len(history.Attempts) == 0 {
 		return ledger{}, fmt.Errorf("invalid send budget ledger at %s", path)
 	}
 	for _, attempt := range history.Attempts {

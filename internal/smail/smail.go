@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +28,8 @@ const (
 	guardBlockedStatus = 71
 )
 
+// guardScript is an s-nail command script. Each command stays on one line
+// because line breaks separate commands.
 const guardScript = `set errexit
 wysh if "$mta" =~ "$PP_EMAIL_MTA_RE"
   set sendwait nosave fullnames ttycharset=utf-8 expandaddr=fail,-all,+addr,failinvaddr
@@ -101,7 +102,7 @@ func (a *Adapter) ListAccounts() ([]string, error) {
 }
 
 func parseAccounts(output string) ([]string, error) {
-	var names []string
+	names := []string{}
 	var account string
 	for line := range strings.Lines(output) {
 		line = strings.TrimRight(line, "\r\n")
@@ -179,10 +180,12 @@ func smtpURL(raw string) (*url.URL, string, error) {
 		return nil, "", invalid
 	}
 	scheme, authority, ok := strings.Cut(raw, "://")
-	if !ok || scheme != parsed.Scheme || parsed.Hostname() == "" ||
-		strings.ContainsAny(authority, "/?#") || strings.ContainsFunc(authority, func(r rune) bool {
-		return r <= ' ' || r == '\x7f'
-	}) {
+	matchesScheme := ok && scheme == parsed.Scheme && parsed.Hostname() != ""
+	cleanAuthority := !strings.ContainsAny(authority, "/?#") &&
+		!strings.ContainsFunc(authority, func(r rune) bool {
+			return r <= ' ' || r == '\x7f'
+		})
+	if !matchesScheme || !cleanAuthority {
 		return nil, "", invalid
 	}
 	if user, host, ok := strings.Cut(authority, "@"); ok {
@@ -223,7 +226,8 @@ func (a *Adapter) checkRemoteHost(host string) error {
 	}
 	for _, address := range addresses {
 		address = address.WithZone("").Unmap()
-		if !address.IsValid() || address.IsUnspecified() || address.IsLoopback() || slices.Contains(local, address) {
+		unusable := !address.IsValid() || address.IsUnspecified() || address.IsLoopback()
+		if unusable || slices.Contains(local, address) {
 			return errors.New("the selected SMTP server resolves to a local or unspecified address")
 		}
 	}
@@ -235,7 +239,7 @@ func interfaceAddresses() ([]netip.Addr, error) {
 	if err != nil {
 		return nil, err
 	}
-	var result []netip.Addr
+	result := make([]netip.Addr, 0, len(addresses))
 	for _, address := range addresses {
 		var ip net.IP
 		switch address := address.(type) {
@@ -257,7 +261,11 @@ func interfaceAddresses() ([]netip.Addr, error) {
 
 func (a *Adapter) Send(account string, endpoint Endpoint, message csvdata.Message) SendResult {
 	if endpoint.pattern == "" {
-		return SendResult{Unattempted, "the account has no approved SMTP endpoint", true}
+		return SendResult{
+			Outcome: Unattempted,
+			Reason:  "the account has no approved SMTP endpoint",
+			Stop:    true,
+		}
 	}
 	tag := newTag()
 	result := a.launch(invocation{
@@ -270,7 +278,11 @@ func (a *Adapter) Send(account string, endpoint Endpoint, message csvdata.Messag
 
 func classify(result observation, tag string) SendResult {
 	if !result.started {
-		return SendResult{Unattempted, "s-nail could not start", true}
+		return SendResult{
+			Outcome: Unattempted,
+			Reason:  "s-nail could not start",
+			Stop:    true,
+		}
 	}
 	ready, blocked := 0, 0
 	for line := range strings.Lines(result.stdout) {
@@ -281,30 +293,41 @@ func classify(result observation, tag string) SendResult {
 			blocked++
 		}
 	}
-	if ready == 0 && blocked == 1 && result.exitCode == guardBlockedStatus && !result.timedOut {
-		return SendResult{Unattempted, "the SMTP transport changed before submission", true}
+	blockedByGuard := ready == 0 && blocked == 1 &&
+		result.exitCode == guardBlockedStatus && !result.timedOut
+	if blockedByGuard {
+		return SendResult{
+			Outcome: Unattempted,
+			Reason:  "the SMTP transport changed before submission",
+			Stop:    true,
+		}
 	}
 	if ready != 1 || blocked != 0 {
-		return SendResult{Unconfirmed, "s-nail did not complete the SMTP startup check", true}
+		return SendResult{
+			Outcome: Unconfirmed,
+			Reason:  "s-nail did not complete the SMTP startup check",
+			Stop:    true,
+		}
 	}
 	switch {
 	case result.timedOut:
-		return SendResult{Unconfirmed, "s-nail timed out", false}
+		return SendResult{Outcome: Unconfirmed, Reason: "s-nail timed out"}
 	case result.signalled:
-		return SendResult{Unconfirmed, "s-nail was interrupted", false}
+		return SendResult{Outcome: Unconfirmed, Reason: "s-nail was interrupted"}
 	case result.success:
 		return SendResult{Outcome: Accepted}
 	case result.exitCode > 0:
-		return SendResult{Unconfirmed, fmt.Sprintf("s-nail exited with status %d", result.exitCode), false}
+		return SendResult{
+			Outcome: Unconfirmed,
+			Reason:  fmt.Sprintf("s-nail exited with status %d", result.exitCode),
+		}
 	default:
-		return SendResult{Unconfirmed, "s-nail could not report completion", false}
+		return SendResult{Outcome: Unconfirmed, Reason: "s-nail could not report completion"}
 	}
 }
 
 func newTag() string {
-	var token [16]byte
-	rand.Read(token[:])
-	return hex.EncodeToString(token[:])
+	return rand.Text()
 }
 
 func (a *Adapter) environment(extra ...string) []string {

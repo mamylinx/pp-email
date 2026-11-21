@@ -107,7 +107,7 @@ func parse(path string, data []byte) (Snapshot, error) {
 		line, _ := reader.FieldPos(0)
 		start := max(lineStarts[line-1], snapshot.bomLength)
 		end := int(reader.InputOffset()) + snapshot.bomLength
-		return Record{Line: line, Fields: fields, raw: span{start, end}}
+		return Record{Line: line, Fields: fields, raw: span{start: start, end: end}}
 	}
 
 	snapshot.Headers = header
@@ -159,7 +159,7 @@ func (s Snapshot) Prepare(mapping Mapping) ([]Message, []error) {
 	}
 
 	messages := make([]Message, 0, len(s.Records))
-	var issues []error
+	issues := []error{}
 	for _, record := range s.Records {
 		message, err := prepareMessage(record, mapping)
 		if err != nil {
@@ -181,7 +181,9 @@ func prepareMessage(record Record, mapping Mapping) (Message, error) {
 	body := record.Fields[mapping.Body]
 
 	for _, field := range []struct{ label, value string }{
-		{"recipient name", name}, {"email address", address}, {"subject", subject},
+		{label: "recipient name", value: name},
+		{label: "email address", value: address},
+		{label: "subject", value: subject},
 	} {
 		if strings.ContainsFunc(field.value, unicode.IsControl) {
 			return Message{}, fmt.Errorf("%s contains a control character", field.label)
@@ -195,7 +197,11 @@ func prepareMessage(record Record, mapping Mapping) (Message, error) {
 
 	address = strings.TrimSpace(address)
 	mailbox, err := mail.ParseAddress(address)
-	if err != nil || mailbox.Name != "" || mailbox.Address != address || !strings.Contains(address, "@") {
+	if err != nil {
+		return Message{}, errors.New("email address must contain one plain mailbox")
+	}
+	plainMailbox := mailbox.Name == "" && mailbox.Address == address && strings.Contains(address, "@")
+	if !plainMailbox {
 		return Message{}, errors.New("email address must contain one plain mailbox")
 	}
 	mailbox.Name = name

@@ -190,7 +190,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.fits() {
-			if msg.String() == "q" && !m.searching && !m.report.exporting {
+			canQuit := msg.String() == "q" && !m.searching && !m.report.exporting
+			if canQuit {
 				return m, m.requestStop(false)
 			}
 			return m, nil
@@ -302,7 +303,7 @@ func (m *Model) openDraft() tea.Cmd {
 }
 
 func (m *Model) accountChoices() []string {
-	var choices []string
+	choices := make([]string, 0, len(m.accounts))
 	for _, name := range m.accounts {
 		if matches(m.queries[accountScreen], name) {
 			choices = append(choices, name)
@@ -427,15 +428,19 @@ func moveChoice(action string, current, count int) int {
 
 func (m *Model) refreshPreview() {
 	query := m.queries[previewScreen]
-	var rows []table.Row
-	var indices []int
-	for i, message := range m.messages {
-		line := strconv.Itoa(message.Record.Line)
-		if matches(query, message.Name, message.Address, message.Subject, line) {
-			rows = append(rows, table.Row{line, iconMail + reports.CleanText(message.Address), reports.CleanText(message.Subject)})
-			indices = append(indices, i)
-		}
-	}
+	rows, indices := filterRows(m.messages,
+		func(message csvdata.Message) bool {
+			line := strconv.Itoa(message.Record.Line)
+			return matches(query, message.Name, message.Address, message.Subject, line)
+		},
+		func(message csvdata.Message) table.Row {
+			return table.Row{
+				strconv.Itoa(message.Record.Line),
+				iconMail + reports.CleanText(message.Address),
+				reports.CleanText(message.Subject),
+			}
+		},
+	)
 	m.preview.setRows(rows, indices)
 	m.previewMessage()
 }
@@ -493,8 +498,13 @@ func (m *Model) browse(msg tea.KeyPressMsg, list *browser, selectDetail func()) 
 }
 
 func (m *Model) searchable() bool {
-	return m.screen == previewScreen || m.screen == historyScreen || m.screen == resultScreen ||
-		(m.screen == accountScreen && !m.loading && len(m.accounts) > 0)
+	switch m.screen {
+	case previewScreen, historyScreen, resultScreen:
+		return true
+	case accountScreen:
+		return !m.loading && len(m.accounts) > 0
+	}
+	return false
 }
 
 func (m *Model) startSearch() tea.Cmd {
@@ -559,13 +569,25 @@ func (m *Model) budgetAllowsBatch() bool {
 }
 
 func (m *Model) startBatch() tea.Cmd {
-	if m.screen != confirmScreen || len(m.messages) == 0 || !m.budgetAllowsBatch() || m.report.saving {
+	ready := m.screen == confirmScreen &&
+		len(m.messages) > 0 &&
+		m.budgetAllowsBatch() &&
+		!m.report.saving
+	if !ready {
 		return nil
 	}
 	m.screen, m.stopping, m.started = sendingScreen, false, time.Now()
 	m.progress = batch.Progress{Counts: batch.Counts{Unattempted: len(m.messages)}}
 	m.stop = make(chan struct{})
-	m.events = batch.Run(m.account, m.snapshot, m.messages, m.mailer, m.open, m.stop, m.limits)
+	m.events = batch.Run(batch.Request{
+		Account:  m.account,
+		Snapshot: m.snapshot,
+		Messages: m.messages,
+		Adapter:  m.mailer,
+		Open:     m.open,
+		Stop:     m.stop,
+		Limits:   m.limits,
+	})
 	return waitEvent(m.events)
 }
 

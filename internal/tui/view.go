@@ -32,32 +32,44 @@ const (
 	iconSkipped = "– "
 )
 
-type browser struct {
-	table   table.Model
-	indices []int
-}
+const (
+	iconWidth          = 2
+	bodyWidthInset     = 4
+	bodyChromeLines    = 5
+	fileChromeLines    = 4
+	accountChromeLines = 3
+	mappingChromeLines = 10
+	previewChromeLines = 4
+	historyChromeLines = 4
+	resultChromeLines  = 9
+	runInfoChromeLines = 2
+	detailChromeLines  = 3
+	inputWidthInset    = 10
 
-func newBrowser() browser { return browser{table: table.New(table.WithFocused(true))} }
+	listSplitPercent    = 56
+	paneGap             = 3
+	addressMaxWidth     = 36
+	addressSplitPercent = 45
+	minColumnWidth      = 5
 
-func (b *browser) selected() (int, bool) {
-	if cursor := b.table.Cursor(); cursor >= 0 && cursor < len(b.indices) {
-		return b.indices[cursor], true
-	}
-	return 0, false
-}
+	lineColumnWidth     = 6
+	finishedColumnWidth = 16
+	statusColumnWidth   = 11
+	countColumnWidth    = 4
+	outcomeColumnWidth  = 13
+	previewColumnCount  = 3
+	historyColumnCount  = 7
+	reportColumnCount   = 3
+	historyFixedWidth   = finishedColumnWidth + statusColumnWidth +
+		3*countColumnWidth + historyColumnCount
+	previewFixedWidth = lineColumnWidth + previewColumnCount
+	reportFixedWidth  = lineColumnWidth + outcomeColumnWidth + reportColumnCount
 
-func (b *browser) setRows(rows []table.Row, indices []int) {
-	previous, hadSelection := b.selected()
-	b.indices = indices
-	b.table.SetRows(rows)
-	for cursor, index := range indices {
-		if hadSelection && index == previous {
-			b.table.SetCursor(cursor)
-			return
-		}
-	}
-	b.table.GotoTop()
-}
+	fieldLabelWidth       = 18
+	mappingColumnMaxWidth = 24
+	mappingWidthOffset    = 19
+	progressBarMaxWidth   = 46
+)
 
 type theme struct {
 	title    lipgloss.Style
@@ -69,34 +81,43 @@ type theme struct {
 
 func (m *Model) setTheme(dark bool) {
 	plain := lipgloss.NewStyle()
-	theme := theme{title: plain.Bold(true), active: plain.Bold(true), selected: plain.Bold(true).Reverse(true), muted: plain,
-		help: help.New()}
+	next := theme{
+		title:    plain.Bold(true),
+		active:   plain.Bold(true),
+		selected: plain.Bold(true).Reverse(true),
+		muted:    plain,
+		help:     help.New(),
+	}
 	if os.Getenv("NO_COLOR") == "" {
 		accent := lipgloss.LightDark(dark)(lipgloss.Color("#56C9CE"), lipgloss.Color("#176D77"))
 		selectionText := lipgloss.LightDark(dark)(lipgloss.Color("#101C20"), lipgloss.Color("#FFFFFF"))
 		muted := lipgloss.LightDark(dark)(lipgloss.Color("#A0ABB3"), lipgloss.Color("#57636A"))
-		theme.active = theme.active.Foreground(accent)
-		theme.selected = plain.Bold(true).Foreground(selectionText).Background(accent)
-		theme.muted = theme.muted.Foreground(muted)
+		next.active = next.active.Foreground(accent)
+		next.selected = plain.Bold(true).Foreground(selectionText).Background(accent)
+		next.muted = next.muted.Foreground(muted)
 	}
-	theme.help.Styles = help.Styles{
-		ShortKey: theme.active, ShortDesc: plain, ShortSeparator: theme.muted, Ellipsis: theme.muted,
+	next.help.Styles = help.Styles{
+		ShortKey:       next.active,
+		ShortDesc:      plain,
+		ShortSeparator: next.muted,
+		Ellipsis:       next.muted,
 	}
-	theme.help.ShortSeparator = "  "
-	theme.help.SetWidth(m.bodyWidth())
-	m.styles = theme
+	next.help.ShortSeparator = "  "
+	next.help.SetWidth(m.bodyWidth())
+	m.styles = next
 	m.styleDetail()
 	directoryStyle := plain.Transform(func(name string) string { return name + "/" })
 	m.picker.Styles = filepicker.Styles{
-		Directory: directoryStyle, EmptyDirectory: plain.SetString("No files here. Use ← to go up."),
+		Directory:      directoryStyle,
+		EmptyDirectory: plain.SetString("No files here. Use ← to go up."),
 	}
 
 	tableStyles := table.Styles{
-		Header: theme.muted.PaddingRight(1).
+		Header: next.muted.PaddingRight(1).
 			BorderStyle(lipgloss.NormalBorder()).BorderBottom(true).
-			BorderBottomForeground(theme.muted.GetForeground()),
+			BorderBottomForeground(next.muted.GetForeground()),
 		Cell:     plain.PaddingRight(1),
-		Selected: theme.selected,
+		Selected: next.selected,
 	}
 	for _, list := range []*browser{&m.preview, &m.report.history, &m.report.rows} {
 		list.table.SetStyles(tableStyles)
@@ -105,8 +126,8 @@ func (m *Model) setTheme(dark bool) {
 
 func (m *Model) fits() bool      { return m.width >= minWidth && m.height >= minHeight }
 func (m *Model) split() bool     { return m.width >= splitWidth }
-func (m *Model) bodyWidth() int  { return max(1, m.width-4) }
-func (m *Model) bodyHeight() int { return max(2, m.height-5) }
+func (m *Model) bodyWidth() int  { return max(1, m.width-bodyWidthInset) }
+func (m *Model) bodyHeight() int { return max(2, m.height-bodyChromeLines) }
 
 func (m *Model) resize(width, height int) {
 	m.width, m.height = width, height
@@ -115,50 +136,53 @@ func (m *Model) resize(width, height int) {
 	}
 	w, h := m.bodyWidth(), m.bodyHeight()
 	m.styles.help.SetWidth(w)
-	m.input.width = w - 10
-	m.picker.SetHeight(h - 4)
+	m.input.width = w - inputWidthInset
+	m.picker.SetHeight(h - fileChromeLines)
 	m.picker, _ = m.picker.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	listWidth, detailWidth := w, w
 	if m.split() {
-		listWidth = w * 56 / 100
-		detailWidth = w - listWidth - 3
+		listWidth = w * listSplitPercent / 100
+		detailWidth = w - listWidth - paneGap
 	}
 
-	addressWidth := min(36, listWidth*45/100) + 2
-	setTable(&m.preview, listWidth, h-4,
-		table.Column{Title: "Line", Width: 6},
+	addressWidth := min(addressMaxWidth, listWidth*addressSplitPercent/100) + iconWidth
+	setTable(&m.preview, listWidth, h-previewChromeLines,
+		table.Column{Title: "Line", Width: lineColumnWidth},
 		table.Column{Title: "Recipient", Width: addressWidth},
-		table.Column{Title: "Subject", Width: listWidth - addressWidth - 9})
+		table.Column{Title: "Subject", Width: listWidth - addressWidth - previewFixedWidth})
 
-	nameWidth := (w - 46) / 2
-	setTable(&m.report.history, w, h-4,
-		table.Column{Title: "Finished", Width: 16},
-		table.Column{Title: "Account", Width: max(5, nameWidth)}, table.Column{Title: "CSV", Width: max(5, w-46-nameWidth)},
-		table.Column{Title: "Status", Width: 11}, table.Column{Title: "A", Width: 4},
-		table.Column{Title: "U", Width: 4}, table.Column{Title: "N", Width: 4})
+	nameWidth := (w - historyFixedWidth) / 2
+	setTable(&m.report.history, w, h-historyChromeLines,
+		table.Column{Title: "Finished", Width: finishedColumnWidth},
+		table.Column{Title: "Account", Width: max(minColumnWidth, nameWidth)},
+		table.Column{Title: "CSV", Width: max(minColumnWidth, w-historyFixedWidth-nameWidth)},
+		table.Column{Title: "Status", Width: statusColumnWidth},
+		table.Column{Title: "A", Width: countColumnWidth},
+		table.Column{Title: "U", Width: countColumnWidth},
+		table.Column{Title: "N", Width: countColumnWidth})
 
-	setTable(&m.report.rows, listWidth, h-9,
-		table.Column{Title: "Line", Width: 6},
-		table.Column{Title: "Outcome", Width: 13},
-		table.Column{Title: "Diagnostic", Width: listWidth - 22})
+	setTable(&m.report.rows, listWidth, h-resultChromeLines,
+		table.Column{Title: "Line", Width: lineColumnWidth},
+		table.Column{Title: "Outcome", Width: outcomeColumnWidth},
+		table.Column{Title: "Diagnostic", Width: listWidth - reportFixedWidth})
 
 	m.styleDetail()
 	switch m.screen {
 	case previewScreen:
 		m.detail.SetWidth(detailWidth)
-		m.detail.SetHeight(h - 4)
+		m.detail.SetHeight(h - previewChromeLines)
 		m.detail.SetYOffset(m.detail.YOffset())
 	case resultScreen:
 		if m.report.runInfo {
 			m.detail.SetWidth(w)
-			m.detail.SetHeight(h - 2)
+			m.detail.SetHeight(h - runInfoChromeLines)
 		} else {
 			m.detail.SetWidth(detailWidth)
-			m.detail.SetHeight(h - 9)
+			m.detail.SetHeight(h - resultChromeLines)
 		}
 	default:
 		m.detail.SetWidth(w)
-		m.detail.SetHeight(h - 3)
+		m.detail.SetHeight(h - detailChromeLines)
 	}
 }
 
@@ -262,7 +286,8 @@ func (m *Model) step(number int, title string) string {
 }
 
 func (m *Model) contextLine() string {
-	return iconAccount + reports.CleanText(m.account) + "  /  " + iconFile + reports.CleanText(filepath.Base(m.snapshot.Path))
+	return iconAccount + reports.CleanText(m.account) +
+		"  /  " + iconFile + reports.CleanText(filepath.Base(m.snapshot.Path))
 }
 
 func (m *Model) accountView() string {
@@ -274,8 +299,15 @@ func (m *Model) accountView() string {
 		return title + "\n\n" + lipgloss.Wrap(reports.CleanText(m.err), m.bodyWidth(), "")
 	}
 	choices := m.accountChoices()
-	return strings.Join([]string{title, m.searchLine("Search accounts"), "",
-		m.choiceList(choices, iconAccount, m.choice, m.bodyHeight()-3, "No matching accounts.")}, "\n")
+	return strings.Join([]string{
+		title,
+		m.searchLine("Search accounts"),
+		"",
+		m.choiceList(choices, m.choice, m.bodyHeight()-accountChromeLines, choiceListStyle{
+			icon:  iconAccount,
+			empty: "No matching accounts.",
+		}),
+	}, "\n")
 }
 
 func (m *Model) fileListView() string {
@@ -307,12 +339,12 @@ func (m *Model) mappingView() string {
 	fieldIcons := [...]string{iconAccount, "→ ", "≡ ", iconFile}
 	for field, label := range fieldLabels {
 		value := "Choose a column"
-		columnWidth := min(24, (m.bodyWidth()-19)/2)
+		columnWidth := min(mappingColumnMaxWidth, (m.bodyWidth()-mappingWidthOffset)/2)
 		if col := m.columns[field]; col >= 0 {
 			value = fixedText(headers[col], columnWidth) + "   " +
 				reports.CleanText(m.snapshot.Records[0].Fields[col])
 		}
-		row := "  " + fixedText(fieldIcons[field]+label, 18) + " " + value
+		row := "  " + fixedText(fieldIcons[field]+label, fieldLabelWidth) + " " + value
 		if field == m.field {
 			row = m.highlightRow(row)
 		}
@@ -322,8 +354,12 @@ func (m *Model) mappingView() string {
 	if sample == "" {
 		sample = "(empty)"
 	}
-	lines = append(lines, "", "≡ Sample: "+sample, m.styles.muted.Render(iconFile+"CSV columns"),
-		m.choiceList(headers, "# ", m.column, m.bodyHeight()-10, ""))
+	lines = append(lines,
+		"",
+		"≡ Sample: "+sample,
+		m.styles.muted.Render(iconFile+"CSV columns"),
+		m.choiceList(headers, m.column, m.bodyHeight()-mappingChromeLines, choiceListStyle{icon: "# "}),
+	)
 	return strings.Join(lines, "\n")
 }
 
@@ -336,14 +372,19 @@ func (m *Model) highlightRow(row string) string {
 	return m.styles.selected.Render(fixedText(row, m.bodyWidth()))
 }
 
-func (m *Model) choiceList(choices []string, icon string, current, visible int, empty string) string {
+type choiceListStyle struct {
+	icon  string
+	empty string
+}
+
+func (m *Model) choiceList(choices []string, current, visible int, style choiceListStyle) string {
 	if len(choices) == 0 {
-		return empty
+		return style.empty
 	}
 	start := min(max(0, current-visible+1), max(0, len(choices)-visible))
-	var lines []string
+	lines := make([]string, 0, visible)
 	for i := start; i < min(len(choices), start+visible); i++ {
-		row := "  " + icon + choices[i]
+		row := "  " + style.icon + choices[i]
 		if i == current {
 			row = m.highlightRow(row)
 		}
@@ -365,7 +406,8 @@ func (m *Model) searchLine(placeholder string) string {
 func (m *Model) previewView() string {
 	title := m.step(4, iconMail+"Review "+emailCount(len(m.messages)))
 	body := m.browserView(&m.preview, "▥ Messages", iconMail+"Message preview", "No matching messages.")
-	return strings.Join([]string{title, m.contextLine(), m.searchLine("Search name, address, subject or line"), body}, "\n")
+	search := m.searchLine("Search name, address, subject or line")
+	return strings.Join([]string{title, m.contextLine(), search, body}, "\n")
 }
 
 func (m *Model) browserView(b *browser, listTitle, detailTitle, empty string) string {
@@ -399,8 +441,11 @@ func (m *Model) paneHeading(title string, focused bool) string {
 
 func (m *Model) confirmView() string {
 	lines := []string{
-		m.step(5, iconSend+"Send "+emailCount(len(m.messages))), "",
-		iconAccount + "Account: " + reports.CleanText(m.account), iconFile + "CSV: " + reports.CleanText(filepath.Base(m.snapshot.Path)), "",
+		m.step(5, iconSend+"Send "+emailCount(len(m.messages))),
+		"",
+		iconAccount + "Account: " + reports.CleanText(m.account),
+		iconFile + "CSV: " + reports.CleanText(filepath.Base(m.snapshot.Path)),
+		"",
 	}
 	if m.budget.MaxPer24Hours == 0 {
 		lines = append(lines, "◷ Pacing and send budget: No limits configured")
@@ -414,7 +459,11 @@ func (m *Model) confirmView() string {
 	if m.budgetErr != nil {
 		lines = append(lines, lipgloss.Wrap(reports.CleanText(m.budgetErr.Error()), m.bodyWidth(), ""))
 	} else if !m.budgetAllowsBatch() {
-		lines = append(lines, fmt.Sprintf("This batch needs %s. Remaining sends: %d.", emailCount(len(m.messages)), m.budget.Remaining))
+		lines = append(lines, fmt.Sprintf(
+			"This batch needs %s. Remaining sends: %d.",
+			emailCount(len(m.messages)),
+			m.budget.Remaining,
+		))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -434,7 +483,7 @@ func (m *Model) sendingView() string {
 	}
 	attempted := m.progress.Accepted + m.progress.Unconfirmed
 	total := attempted + m.progress.Unattempted
-	width := min(46, m.bodyWidth())
+	width := min(progressBarMaxWidth, m.bodyWidth())
 	filled := int(float64(width) * float64(attempted) / float64(max(1, total)))
 	bar := m.styles.active.Render(strings.Repeat("━", filled)) + m.styles.muted.Render(strings.Repeat("─", width-filled))
 	return strings.Join([]string{
@@ -458,31 +507,30 @@ func (m *Model) historyView() string {
 	case len(m.report.history.indices) == 0 && !m.report.loading:
 		list = "No matching runs."
 	}
-	return strings.Join([]string{title, m.searchLine("Search account or CSV filename"),
-		m.styles.muted.Render(iconAccept + "A Accepted  ·  " + iconPending + "U Unconfirmed  ·  " + iconSkipped + "N Unattempted"), note, list}, "\n")
+	return strings.Join([]string{
+		title,
+		m.searchLine("Search account or CSV filename"),
+		m.styles.muted.Render(outcomeLegend()),
+		note,
+		list,
+	}, "\n")
 }
 
 func (m *Model) resultView() string {
 	run := m.report.current
-	title := m.styles.title.Render(iconReport+"Batch report") + "  " + statusIcon(run.Status) + reports.CleanText(run.Status)
+	title := m.styles.title.Render(iconReport+"Batch report") +
+		"  " + statusIcon(run.Status) + reports.CleanText(string(run.Status))
 	if m.report.runInfo {
 		return title + "\n\n" + m.detail.View()
 	}
-	recovery := []string{"", ""}
-	if run.RecoveryPath != "" {
-		pathLines := strings.Split(lipgloss.Wrap(recoveryText(run), m.bodyWidth(), ""), "\n")
-		copy(recovery, pathLines)
-		if len(pathLines) > 2 {
-			recovery[1] = ansi.Truncate(recovery[1]+" …", m.bodyWidth(), "…")
-		}
-	}
-	var filters []string
+	recovery := recoveryLines(run, m.bodyWidth())
+	filters := make([]string, 0, len(outcomeFilters))
 	for i, filter := range outcomeFilters {
-		filter = outcomeIcon(filter) + filter
+		label := filter.icon + filter.title()
 		if i == m.report.filter {
-			filter = m.styles.selected.Render(filter)
+			label = m.styles.selected.Render(label)
 		}
-		filters = append(filters, filter)
+		filters = append(filters, label)
 	}
 	note := m.report.exportNotice
 	if note == "" {
@@ -497,24 +545,53 @@ func (m *Model) resultView() string {
 			note = fmt.Sprintf("First unattempted source line: %d", run.FirstUnattemptedLine)
 		}
 	}
-	return strings.Join([]string{title, iconAccount + reports.CleanText(run.Account) + "  /  " + iconFile + reports.CleanText(run.Source),
+	context := iconAccount + reports.CleanText(run.Account) +
+		"  /  " + iconFile + reports.CleanText(run.Source)
+	return strings.Join([]string{
+		title,
+		context,
 		countsText(run.Counts),
-		recovery[0], recovery[1], reports.CleanText(note), strings.Join(filters, "   "),
+		recovery[0],
+		recovery[1],
+		reports.CleanText(note),
+		strings.Join(filters, "   "),
 		m.searchLine("Search source line"),
-		m.browserView(&m.report.rows, "▥ Outcomes", "≡ Row detail", "No matching rows.")}, "\n")
+		m.browserView(&m.report.rows, "▥ Outcomes", "≡ Row detail", "No matching rows."),
+	}, "\n")
+}
+
+func recoveryLines(report reports.Report, width int) [2]string {
+	var lines [2]string
+	if report.RecoveryPath == "" {
+		return lines
+	}
+	wrapped := strings.Split(lipgloss.Wrap(recoveryText(report), width, ""), "\n")
+	copy(lines[:], wrapped)
+	if len(wrapped) > len(lines) {
+		lines[1] = ansi.Truncate(lines[1]+" …", width, "…")
+	}
+	return lines
 }
 
 func (m *Model) exportView() string {
 	title := m.styles.title.Render(iconExport + "Export run as CSV")
 	if m.report.exportPath != "" {
-		return title + "\n\n" + iconAccept + "Report saved to\n" + lipgloss.Wrap(reports.CleanText(m.report.exportPath), m.bodyWidth(), "")
+		return title + "\n\n" + iconAccept + "Report saved to\n" +
+			lipgloss.Wrap(reports.CleanText(m.report.exportPath), m.bodyWidth(), "")
 	}
 	status := m.report.exportNotice
 	if m.report.writing {
 		status = "Saving report…"
 	}
-	return strings.Join([]string{title, fmt.Sprintf("All %d source rows will be exported.", len(m.report.current.Rows)), "",
-		iconFolder + "Path: " + m.input.View(""), "", lipgloss.Wrap(reports.CleanText(status), m.bodyWidth(), "")}, "\n")
+	lines := []string{
+		title,
+		fmt.Sprintf("All %d source rows will be exported.", len(m.report.current.Rows)),
+		"",
+		iconFolder + "Path: " + m.input.View(""),
+		"",
+		lipgloss.Wrap(reports.CleanText(status), m.bodyWidth(), ""),
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) footer() string {
@@ -551,11 +628,26 @@ func (m *Model) bindings(showIcons bool) []key.Binding {
 	case accountScreen:
 		return []key.Binding{choose, shortcut("Enter", "↵ ", "Continue"), search, shortcut("R", "↻ ", "Reload")}
 	case fileScreen:
-		return []key.Binding{choose, shortcut("Enter", iconFile, "Open CSV"), shortcut("←", iconFolder, "Parent folder"), back}
+		return []key.Binding{
+			choose,
+			shortcut("Enter", iconFile, "Open CSV"),
+			shortcut("←", iconFolder, "Parent folder"),
+			back,
+		}
 	case mappingScreen:
-		return []key.Binding{choose, shortcut("Enter", "↵ ", "Map & continue"), shortcut("Tab", "⇥ ", "Next field"), back}
+		return []key.Binding{
+			choose,
+			shortcut("Enter", "↵ ", "Map & continue"),
+			shortcut("Tab", "⇥ ", "Next field"),
+			back,
+		}
 	case validationScreen:
-		return []key.Binding{scroll, shortcut("M", "≡ ", "Remap columns"), shortcut("F", iconFile, "Choose another CSV"), back}
+		return []key.Binding{
+			scroll,
+			shortcut("M", "≡ ", "Remap columns"),
+			shortcut("F", iconFile, "Choose another CSV"),
+			back,
+		}
 	case previewScreen:
 		pane := "Switch pane"
 		if !m.split() {
@@ -575,7 +667,13 @@ func (m *Model) bindings(showIcons bool) []key.Binding {
 			return []key.Binding{shortcut("Esc", "■ ", "Stop after current message")}
 		}
 	case historyScreen:
-		return []key.Binding{choose, shortcut("Enter", iconReport, "Open report"), search, shortcut("R", "↻ ", "Reload"), back}
+		return []key.Binding{
+			choose,
+			shortcut("Enter", iconReport, "Open report"),
+			search,
+			shortcut("R", "↻ ", "Reload"),
+			back,
+		}
 	case resultScreen:
 		if m.report.runInfo {
 			return []key.Binding{scroll, shortcut("E", iconExport, "Export CSV"), back}

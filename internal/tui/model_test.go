@@ -122,7 +122,9 @@ func TestFlowConfirmsOneRunAndShowsRecovery(t *testing.T) {
 	if len(called) != 1 {
 		t.Fatalf("sent %d messages", len(called))
 	}
-	if message := <-called; message.Body != "Hello Ada\r\nSecond line\tcolumn\vvertical\rreturn" || message.Record.Line != 2 {
+	message := <-called
+	if message.Body != "Hello Ada\r\nSecond line\tcolumn\vvertical\rreturn" ||
+		message.Record.Line != 2 {
 		t.Fatalf("wrong message: %+v", message)
 	}
 	model.Update(tea.WindowSizeMsg{Width: max(120, len(model.report.current.RecoveryPath)+40), Height: 24})
@@ -136,7 +138,8 @@ func TestFlowConfirmsOneRunAndShowsRecovery(t *testing.T) {
 func TestBudgetConfirmationAndRunnerRecheck(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "limits.json")
-	if err := os.WriteFile(path, []byte(`{"personal":{"messages_per_minute":6,"max_per_24_hours":1}}`), 0o600); err != nil {
+	config := `{"personal":{"messages_per_minute":6,"max_per_24_hours":1}}`
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	limits, err := sendlimits.Load(path)
@@ -208,18 +211,24 @@ func TestStopWhileStartingWaitsForResult(t *testing.T) {
 		t.Fatalf("stop did not keep the running model alive: %+v", model.report.current)
 	}
 	drainRun(t, model, cmd)
-	if model.report.current.Status != "Stopped" || model.report.current.Counts.Unattempted != 1 {
+	if model.report.current.Status != reports.Stopped || model.report.current.Counts.Unattempted != 1 {
 		t.Fatalf("unexpected stopped run: %+v", model.report.current)
 	}
 }
 
 func TestUnrecordedRowAndUnverifiedPathAreVisible(t *testing.T) {
 	model := New(testMailer{}, t.TempDir(), nil)
-	model.showReport(reports.New("work", "sample.csv", time.Now(), time.Now(), batch.Result{
-		Counts:          batch.Counts{Accepted: 1, Unconfirmed: 1, Unattempted: 1},
-		UnrecordedLines: []int{3}, FirstUnattemptedLine: 4,
-		RecoveryStatus: batch.RecoveryUnverified, RecoveryPath: "/tmp/example.csv",
-	}, nil))
+	model.showReport(reports.New(reports.Input{
+		Account:  "work",
+		Source:   "sample.csv",
+		Started:  time.Now(),
+		Finished: time.Now(),
+		Result: batch.Result{
+			Counts:          batch.Counts{Accepted: 1, Unconfirmed: 1, Unattempted: 1},
+			UnrecordedLines: []int{3}, FirstUnattemptedLine: 4,
+			RecoveryStatus: batch.RecoveryUnverified, RecoveryPath: "/tmp/example.csv",
+		},
+	}))
 	model.Update(press('i'))
 	content := ansi.Strip(model.View().Content)
 	for _, want := range []string{"unverified", "/tmp/example.csv", "line 3 could not be saved", "source line: 4",
@@ -236,7 +245,7 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 			if size.Width == 80 {
 				t.Setenv("NO_COLOR", "1")
 			}
-			var attempted []int
+			attempted := []int{}
 			mailer := testMailer{send: func(message csvdata.Message) smail.SendResult {
 				attempted = append(attempted, message.Record.Line)
 				if message.Record.Line == 4 {
@@ -246,9 +255,15 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 			}}
 			longLine := strings.Repeat("x", size.Width)
 			body := "Second\n" + longLine + "\n" + strings.Repeat("Body line\n", size.Height) + "End of preview"
-			model := openFixture(t, mailer, "Ada,ada@example.invalid,Start,\"First\nline\"\nQuinn,quinn@example.invalid,Follow-up,\""+body+"\"")
+			row := "Ada,ada@example.invalid,Start,\"First\nline\"\n" +
+				"Quinn,quinn@example.invalid,Follow-up,\"" + body + "\""
+			model := openFixture(t, mailer, row)
 			model.Update(size)
-			requireView(t, model, "✉ Review 2 emails", "Enter Continue to confirmation", "⌕ Search name, address, subject or line")
+			requireView(t, model,
+				"✉ Review 2 emails",
+				"Enter Continue to confirmation",
+				"⌕ Search name, address, subject or line",
+			)
 			requireHighlight(t, model, "1 + New batch")
 			requireHighlight(t, model, "▥ Messages")
 			requireHighlight(t, model, "2      ✉ ada@")
@@ -383,8 +398,11 @@ func requireHeaderRule(t *testing.T, model *Model, b *browser, header string) {
 
 func requireHighlight(t *testing.T, model *Model, text string) {
 	t.Helper()
-	prefix, _, _ := strings.Cut(model.styles.selected.Render(text), text)
-	if prefix == "" || !strings.Contains(model.View().Content, prefix+text) {
+	prefix, _, wrapped := strings.Cut(model.styles.selected.Render(text), text)
+	if !wrapped || prefix == "" {
+		t.Fatalf("selection style does not wrap %q", text)
+	}
+	if !strings.Contains(model.View().Content, prefix+text) {
 		t.Errorf("missing selection highlight on %q:\n%s", text, ansi.Strip(model.View().Content))
 	}
 }

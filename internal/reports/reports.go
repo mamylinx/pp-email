@@ -22,13 +22,21 @@ import (
 
 const version = 1
 
+type Status string
+
+const (
+	Completed Status = "Completed"
+	Stopped   Status = "Stopped"
+	Aborted   Status = "Aborted"
+)
+
 type Summary struct {
 	ID       string       `json:"id"`
 	Started  time.Time    `json:"started"`
 	Finished time.Time    `json:"finished"`
 	Account  string       `json:"account"`
 	Source   string       `json:"source"`
-	Status   string       `json:"status"`
+	Status   Status       `json:"status"`
 	Counts   batch.Counts `json:"counts"`
 }
 
@@ -43,25 +51,44 @@ type Report struct {
 	Rows                 []batch.RowResult    `json:"rows"`
 }
 
-func New(account, source string, started, finished time.Time, result batch.Result, messages []csvdata.Message) Report {
-	status := "Completed"
+type Input struct {
+	Account  string
+	Source   string
+	Started  time.Time
+	Finished time.Time
+	Result   batch.Result
+	Messages []csvdata.Message
+}
+
+func New(input Input) Report {
+	status := Completed
 	switch {
-	case result.Error != "":
-		status = "Aborted"
-	case result.Stopped:
-		status = "Stopped"
+	case input.Result.Error != "":
+		status = Aborted
+	case input.Result.Stopped:
+		status = Stopped
 	}
-	rows := result.Rows(messages)
+	rows := input.Result.Rows(input.Messages)
 	for i := range rows {
 		rows[i].Reason = CleanText(rows[i].Reason)
 	}
 	return Report{
-		Version: version, Summary: Summary{
-			ID: rand.Text(), Started: started.UTC(), Finished: finished.UTC(),
-			Account: CleanText(account), Source: CleanText(filepath.Base(source)), Status: status, Counts: result.Counts,
+		Version: version,
+		Summary: Summary{
+			ID:       rand.Text(),
+			Started:  input.Started.UTC(),
+			Finished: input.Finished.UTC(),
+			Account:  CleanText(input.Account),
+			Source:   CleanText(filepath.Base(input.Source)),
+			Status:   status,
+			Counts:   input.Result.Counts,
 		},
-		Error: CleanText(result.Error), RecoveryPath: result.RecoveryPath, RecoveryStatus: result.RecoveryStatus,
-		UnrecordedLines: result.UnrecordedLines, FirstUnattemptedLine: result.FirstUnattemptedLine, Rows: rows,
+		Error:                CleanText(input.Result.Error),
+		RecoveryPath:         input.Result.RecoveryPath,
+		RecoveryStatus:       input.Result.RecoveryStatus,
+		UnrecordedLines:      input.Result.UnrecordedLines,
+		FirstUnattemptedLine: input.Result.FirstUnattemptedLine,
+		Rows:                 rows,
 	}
 }
 
@@ -124,7 +151,7 @@ func List() ([]Summary, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	var summaries []Summary
+	summaries := make([]Summary, 0, len(entries))
 	var skipped int
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) != ".json" {
@@ -191,8 +218,11 @@ func read(path string) (Report, error) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return Report{}, err
 	}
-	if report.Version != version || report.ID+".json" != filepath.Base(path) ||
-		report.Started.IsZero() || report.Finished.IsZero() || !validRows(report) {
+	formatValid := report.Version == version && report.ID+".json" == filepath.Base(path)
+	timesValid := !report.Started.IsZero() && !report.Finished.IsZero()
+	statusValid := report.Status == Completed || report.Status == Stopped || report.Status == Aborted
+	recognized := formatValid && timesValid && statusValid && validRows(report)
+	if !recognized {
 		return Report{}, errors.New("unrecognized report format")
 	}
 	return report, nil
@@ -223,7 +253,11 @@ func validRows(report Report) bool {
 func Export(path string, report Report) error {
 	return publish(path, func(w io.Writer) error {
 		csvFile := csv.NewWriter(w)
-		if err := csvFile.Write([]string{"run_id", "timestamp", "account", "source_file", "source_line", "outcome", "diagnostic"}); err != nil {
+		header := []string{
+			"run_id", "timestamp", "account", "source_file",
+			"source_line", "outcome", "diagnostic",
+		}
+		if err := csvFile.Write(header); err != nil {
 			return err
 		}
 		for _, row := range report.Rows {

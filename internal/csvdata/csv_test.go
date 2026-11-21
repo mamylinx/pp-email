@@ -74,7 +74,9 @@ func TestBodyEscapesPreserveSource(t *testing.T) {
 		t.Fatalf("prepare = %v, %v", messages, issues)
 	}
 	message := messages[0]
-	if want := "First\nSecond\nThird\r\nFourth\ttab\vvertical\rreturn\nLiterals: \\n \\r \\t \\v and \\x"; message.Body != want {
+	want := "First\nSecond\nThird\r\nFourth\ttab\vvertical\rreturn\n" +
+		"Literals: \\n \\r \\t \\v and \\x"
+	if message.Body != want {
 		t.Errorf("body = %q, want %q", message.Body, want)
 	}
 	if message.Subject != `Literal\nsubject` {

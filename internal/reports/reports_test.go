@@ -20,15 +20,35 @@ func TestReportStoreAndSpreadsheetExport(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	messages := []csvdata.Message{
-		{Record: csvdata.Record{Line: 2}, Name: "Personal Name", Address: "private@example.invalid", Subject: "Private subject", Body: "Private body"},
+		{
+			Record:  csvdata.Record{Line: 2},
+			Name:    "Personal Name",
+			Address: "private@example.invalid",
+			Subject: "Private subject",
+			Body:    "Private body",
+		},
 		{Record: csvdata.Record{Line: 4}},
 	}
 	result := batch.Result{
 		Counts:          batch.Counts{Accepted: 1, Unconfirmed: 1},
 		UnconfirmedRows: []batch.Issue{{Line: 4, Reason: "  +reason\x1b"}},
 	}
-	first := New("=account", "/private/source/@send.csv", t0, t0.Add(time.Second), result, messages)
-	second := New("other account", "another.csv", t0, t0.Add(2*time.Second), result, messages)
+	first := New(Input{
+		Account:  "=account",
+		Source:   "/private/source/@send.csv",
+		Started:  t0,
+		Finished: t0.Add(time.Second),
+		Result:   result,
+		Messages: messages,
+	})
+	second := New(Input{
+		Account:  "other account",
+		Source:   "another.csv",
+		Started:  t0,
+		Finished: t0.Add(2 * time.Second),
+		Result:   result,
+		Messages: messages,
+	})
 	if err := Save(first); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +75,11 @@ func TestReportStoreAndSpreadsheetExport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{"Personal Name", "private@example.invalid", "Private subject", "Private body", "/private/source/"} {
+	privateValues := []string{
+		"Personal Name", "private@example.invalid", "Private subject",
+		"Private body", "/private/source/",
+	}
+	for _, private := range privateValues {
 		if bytes.Contains(data, []byte(private)) {
 			t.Errorf("saved report contains %q", private)
 		}

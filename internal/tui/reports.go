@@ -57,14 +57,40 @@ type reportView struct {
 	exportPath   string
 }
 
-var outcomeFilters = [...]string{"All", "Accepted", "Unconfirmed", "Unattempted"}
+type outcomeFilter struct {
+	outcome smail.Outcome
+	icon    string
+	key     string
+	all     bool
+}
+
+var outcomeFilters = [...]outcomeFilter{
+	{icon: "≡ ", all: true},
+	{outcome: smail.Accepted, icon: iconAccept, key: "A"},
+	{outcome: smail.Unconfirmed, icon: iconPending, key: "U"},
+	{outcome: smail.Unattempted, icon: iconSkipped, key: "N"},
+}
+
+func (f outcomeFilter) title() string {
+	if f.all {
+		return "All"
+	}
+	return reports.OutcomeLabel(f.outcome)
+}
 
 func newReportView() reportView {
 	return reportView{history: newBrowser(), rows: newBrowser()}
 }
 
 func (m *Model) finishRun(result batch.Result) tea.Cmd {
-	latest := reports.New(m.account, m.snapshot.Path, m.started, time.Now(), result, m.messages)
+	latest := reports.New(reports.Input{
+		Account:  m.account,
+		Source:   m.snapshot.Path,
+		Started:  m.started,
+		Finished: time.Now(),
+		Result:   result,
+		Messages: m.messages,
+	})
 	m.events, m.stop = nil, nil
 	m.help = false
 	m.report.latest, m.report.saving, m.report.saveErr = latest, true, nil
@@ -146,18 +172,22 @@ func (m *Model) includeLatest() {
 
 func (m *Model) refreshHistory() {
 	query := m.queries[historyScreen]
-	var rows []table.Row
-	var indices []int
-	for i, item := range m.report.summaries {
-		if matches(query, item.Account, item.Source) {
-			rows = append(rows, table.Row{
+	rows, indices := filterRows(m.report.summaries,
+		func(item reports.Summary) bool {
+			return matches(query, item.Account, item.Source)
+		},
+		func(item reports.Summary) table.Row {
+			return table.Row{
 				item.Finished.Local().Format("2006-01-02 15:04"),
-				reports.CleanText(item.Account), reports.CleanText(item.Source), statusIcon(item.Status) + reports.CleanText(item.Status),
-				strconv.Itoa(item.Counts.Accepted), strconv.Itoa(item.Counts.Unconfirmed), strconv.Itoa(item.Counts.Unattempted),
-			})
-			indices = append(indices, i)
-		}
-	}
+				reports.CleanText(item.Account),
+				reports.CleanText(item.Source),
+				statusIcon(item.Status) + reports.CleanText(string(item.Status)),
+				strconv.Itoa(item.Counts.Accepted),
+				strconv.Itoa(item.Counts.Unconfirmed),
+				strconv.Itoa(item.Counts.Unattempted),
+			}
+		},
+	)
 	m.report.history.setRows(rows, indices)
 }
 
@@ -212,16 +242,20 @@ func (m *Model) showReport(report reports.Report) {
 
 func (m *Model) refreshReportRows() {
 	query := m.queries[resultScreen]
-	var rows []table.Row
-	var indices []int
-	for i, row := range m.report.current.Rows {
-		label := reports.OutcomeLabel(row.Outcome)
-		line := strconv.Itoa(row.Line)
-		if (m.report.filter == 0 || label == outcomeFilters[m.report.filter]) && matches(query, line) {
-			rows = append(rows, table.Row{line, outcomeIcon(label) + label, reports.CleanText(row.Reason)})
-			indices = append(indices, i)
-		}
-	}
+	filter := outcomeFilters[m.report.filter]
+	rows, indices := filterRows(m.report.current.Rows,
+		func(row batch.RowResult) bool {
+			inFilter := filter.all || row.Outcome == filter.outcome
+			return inFilter && matches(query, strconv.Itoa(row.Line))
+		},
+		func(row batch.RowResult) table.Row {
+			return table.Row{
+				strconv.Itoa(row.Line),
+				outcomeIcon(row.Outcome) + reports.OutcomeLabel(row.Outcome),
+				reports.CleanText(row.Reason),
+			}
+		},
+	)
 	m.report.rows.setRows(rows, indices)
 	if !m.report.runInfo {
 		m.selectReportRow()
@@ -232,7 +266,7 @@ func (m *Model) selectReportRow() {
 	if i, ok := m.report.rows.selected(); ok {
 		row := m.report.current.Rows[i]
 		label := reports.OutcomeLabel(row.Outcome)
-		detail := fmt.Sprintf("%sLine %d: %s", outcomeIcon(label), row.Line, label)
+		detail := fmt.Sprintf("%sLine %d: %s", outcomeIcon(row.Outcome), row.Line, label)
 		if row.Reason != "" {
 			detail += "\n\n" + reports.CleanText(row.Reason)
 		}
@@ -352,14 +386,22 @@ func (m *Model) cancelExport() {
 }
 
 func runDetail(report reports.Report) string {
-	var lines []string
-	lines = append(lines, statusIcon(report.Status)+"Status: "+reports.CleanText(report.Status),
-		iconAccount+"Account: "+reports.CleanText(report.Account), iconFile+"CSV: "+reports.CleanText(report.Source))
-	if !report.Started.IsZero() {
-		lines = append(lines, "◷ Started: "+report.Started.Local().Format(time.RFC3339),
-			"◷ Finished: "+report.Finished.Local().Format(time.RFC3339))
+	lines := []string{
+		statusIcon(report.Status) + "Status: " + reports.CleanText(string(report.Status)),
+		iconAccount + "Account: " + reports.CleanText(report.Account),
+		iconFile + "CSV: " + reports.CleanText(report.Source),
 	}
-	lines = append(lines, "", countsText(report.Counts), "Accepted means the SMTP server accepted the submission.")
+	if !report.Started.IsZero() {
+		lines = append(lines,
+			"◷ Started: "+report.Started.Local().Format(time.RFC3339),
+			"◷ Finished: "+report.Finished.Local().Format(time.RFC3339),
+		)
+	}
+	lines = append(lines,
+		"",
+		countsText(report.Counts),
+		"Accepted means the SMTP server accepted the submission.",
+	)
 	if report.Error != "" {
 		lines = append(lines, "", reports.CleanText(report.Error))
 	}
@@ -376,34 +418,50 @@ func runDetail(report reports.Report) string {
 }
 
 func recoveryText(report reports.Report) string {
-	return fmt.Sprintf("%sRecovery CSV (%s): %s", iconFile, reports.CleanText(string(report.RecoveryStatus)), reports.CleanText(report.RecoveryPath))
+	return fmt.Sprintf(
+		"%sRecovery CSV (%s): %s",
+		iconFile,
+		reports.CleanText(string(report.RecoveryStatus)),
+		reports.CleanText(report.RecoveryPath),
+	)
 }
 
 func countsText(counts batch.Counts) string {
-	return fmt.Sprintf("%sAccepted: %d %sUnconfirmed: %d %sUnattempted: %d",
-		iconAccept, counts.Accepted, iconPending, counts.Unconfirmed, iconSkipped, counts.Unattempted)
+	return fmt.Sprintf(
+		"%sAccepted: %d %sUnconfirmed: %d %sUnattempted: %d",
+		iconAccept, counts.Accepted,
+		iconPending, counts.Unconfirmed,
+		iconSkipped, counts.Unattempted,
+	)
 }
 
-func outcomeIcon(label string) string {
-	switch label {
-	case "Accepted":
-		return iconAccept
-	case "Unconfirmed":
-		return iconPending
-	case "Unattempted":
-		return iconSkipped
-	default:
-		return "≡ "
+func outcomeIcon(outcome smail.Outcome) string {
+	for _, filter := range outcomeFilters {
+		if !filter.all && filter.outcome == outcome {
+			return filter.icon
+		}
 	}
+	return "≡ "
 }
 
-func statusIcon(status string) string {
+func outcomeLegend() string {
+	parts := make([]string, 0, len(outcomeFilters)-1)
+	for _, filter := range outcomeFilters {
+		if filter.all {
+			continue
+		}
+		parts = append(parts, filter.icon+filter.key+" "+filter.title())
+	}
+	return strings.Join(parts, "  ·  ")
+}
+
+func statusIcon(status reports.Status) string {
 	switch status {
-	case "Completed":
+	case reports.Completed:
 		return iconAccept
-	case "Stopped":
+	case reports.Stopped:
 		return "■ "
-	case "Aborted":
+	case reports.Aborted:
 		return "! "
 	default:
 		return iconReport

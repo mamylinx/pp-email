@@ -53,9 +53,19 @@ func fixture(t *testing.T) (csvdata.Snapshot, []csvdata.Message) {
 	return snapshot, messages
 }
 
+func testRequest(snapshot csvdata.Snapshot, messages []csvdata.Message, mailer Adapter) Request {
+	return Request{
+		Account:  "chosen",
+		Snapshot: snapshot,
+		Messages: messages,
+		Adapter:  mailer,
+		Open:     CreateRecovery,
+	}
+}
+
 func completed(t *testing.T, events <-chan Event) (Result, []int) {
 	t.Helper()
-	var lines []int
+	lines := []int{}
 	for event := range events {
 		if event.Result != nil {
 			return *event.Result, lines
@@ -88,7 +98,10 @@ func TestPacingWaitCanBeStopped(t *testing.T) {
 			close(stop)
 		}
 	})
-	events := Run("chosen", snapshot, messages, mailer, CreateRecovery, stop, limits)
+	request := testRequest(snapshot, messages, mailer)
+	request.Stop = stop
+	request.Limits = limits
+	events := Run(request)
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	for {
@@ -139,7 +152,7 @@ func TestBatchContinuesAfterUnconfirmedRow(t *testing.T) {
 		}
 		return smail.SendResult{Outcome: smail.Accepted}
 	}}
-	result, lines := completed(t, Run("chosen", snapshot, messages, mailer, CreateRecovery, nil, nil))
+	result, lines := completed(t, Run(testRequest(snapshot, messages, mailer)))
 	select {
 	case message := <-errs:
 		t.Error(message)
@@ -165,7 +178,7 @@ func TestSuccessfulBatchRemovesEmptyRecovery(t *testing.T) {
 	mailer := fakeMailer{send: func(csvdata.Message) smail.SendResult {
 		return smail.SendResult{Outcome: smail.Accepted}
 	}}
-	result, _ := completed(t, Run("chosen", snapshot, messages, mailer, CreateRecovery, nil, nil))
+	result, _ := completed(t, Run(testRequest(snapshot, messages, mailer)))
 	paths, err := filepath.Glob(filepath.Join(filepath.Dir(snapshot.Path), "pp-email-failures-*.csv"))
 	if result.Accepted != 3 || result.RecoveryPath != "" || result.Error != "" || err != nil || len(paths) != 0 {
 		t.Fatalf("result = %+v, files = %v, %v", result, paths, err)
@@ -188,7 +201,9 @@ func TestStopsBeforeNextRow(t *testing.T) {
 				return smail.SendResult{Outcome: smail.Unconfirmed, Reason: "timed out"}
 			},
 		}
-		result, _ := completed(t, Run("chosen", snapshot, messages, mailer, CreateRecovery, stop, nil))
+		request := testRequest(snapshot, messages, mailer)
+		request.Stop = stop
+		result, _ := completed(t, Run(request))
 		if duringStartup {
 			if !result.Stopped || result.Unattempted != 3 || result.FirstUnattemptedLine != 2 || result.RecoveryPath != "" {
 				t.Fatalf("startup stop = %+v", result)
@@ -254,7 +269,9 @@ func TestRecoveryFileErrors(t *testing.T) {
 			mailer := fakeMailer{send: func(csvdata.Message) smail.SendResult {
 				return smail.SendResult{Outcome: smail.Unconfirmed, Reason: "submission unconfirmed"}
 			}}
-			result, _ := completed(t, Run("chosen", snapshot, messages, mailer, open, nil, nil))
+			request := testRequest(snapshot, messages, mailer)
+			request.Open = open
+			result, _ := completed(t, Run(request))
 			if result.Error == "" || result.RecoveryStatus != test.want || result.RecoveryPath == "" {
 				t.Fatalf("missing file error: %+v", result)
 			}
@@ -288,7 +305,7 @@ func TestGuardRefusalDoesNotCreateRecoveryRow(t *testing.T) {
 	mailer := fakeMailer{send: func(csvdata.Message) smail.SendResult {
 		return smail.SendResult{Outcome: smail.Unattempted, Stop: true, Reason: "SMTP transport changed"}
 	}}
-	result, lines := completed(t, Run("chosen", snapshot, messages, mailer, CreateRecovery, nil, nil))
+	result, lines := completed(t, Run(testRequest(snapshot, messages, mailer)))
 	if result.Unattempted != 3 || result.FirstUnattemptedLine != 2 ||
 		result.RecoveryPath != "" || !slices.Equal(lines, []int{2}) {
 		t.Fatalf("guard refusal result = %+v, lines = %v", result, lines)

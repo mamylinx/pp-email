@@ -397,7 +397,7 @@ func (m *Model) validateMapping() {
 	if len(issues) > 0 {
 		lines := make([]string, 0, len(issues))
 		for _, issue := range issues {
-			lines = append(lines, reports.CleanText(issue.Error()))
+			lines = append(lines, "! "+reports.CleanText(issue.Error()))
 		}
 		m.screen = validationScreen
 		m.resize(m.width, m.height)
@@ -432,7 +432,7 @@ func (m *Model) refreshPreview() {
 	for i, message := range m.messages {
 		line := strconv.Itoa(message.Record.Line)
 		if matches(query, message.Name, message.Address, message.Subject, line) {
-			rows = append(rows, table.Row{"", line, reports.CleanText(message.Address), reports.CleanText(message.Subject)})
+			rows = append(rows, table.Row{line, iconMail + reports.CleanText(message.Address), reports.CleanText(message.Subject)})
 			indices = append(indices, i)
 		}
 	}
@@ -447,7 +447,7 @@ func (m *Model) previewMessage() {
 		if message.Name != "" {
 			to = message.Name + " <" + message.Address + ">"
 		}
-		m.setDetail("To: " + reports.CleanText(to) + "\nSubject: " + reports.CleanText(message.Subject) +
+		m.setDetail("→ To: " + reports.CleanText(to) + "\n≡ Subject: " + reports.CleanText(message.Subject) +
 			"\n\n" + cleanMultiline(bodyPreview.Replace(message.Body)))
 	} else {
 		m.setDetail("")

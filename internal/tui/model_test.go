@@ -59,11 +59,14 @@ func openFixture(t *testing.T, mailer testMailer, row string) *Model {
 	if model.choice != 1 {
 		t.Fatalf("account selection did not move: %d", model.choice)
 	}
+	requireHighlight(t, model, "  ◎ personal")
 	_, cmd := model.Update(press(tea.KeyEnter))
 	if cmd == nil || model.screen != fileScreen || model.account != "personal" {
 		t.Fatalf("account selection: screen %d, account %q", model.screen, model.account)
 	}
 	model.Update(cmd())
+	requireHighlight(t, model, "  ▤ send.csv")
+	requireView(t, model, "↑/↓ Choose", "Enter Open CSV", "← Parent folder", "? Help")
 	_, cmd = model.Update(press(tea.KeyEnter))
 	if cmd == nil || model.screen != loadingScreen {
 		t.Fatalf("file picker did not select the fixture: screen %d", model.screen)
@@ -72,6 +75,8 @@ func openFixture(t *testing.T, mailer testMailer, row string) *Model {
 	if model.screen != mappingScreen || !strings.Contains(ansi.Strip(model.View().Content), "2. Field") {
 		t.Fatalf("mapping did not label duplicated headers: %s", ansi.Strip(model.View().Content))
 	}
+	requireHighlight(t, model, "  ◎ Recipient name")
+	requireHighlight(t, model, "  # 1. Field")
 	model.Update(press(tea.KeyEnter))
 	for range 3 {
 		model.Update(press(tea.KeyDown))
@@ -217,7 +222,8 @@ func TestUnrecordedRowAndUnverifiedPathAreVisible(t *testing.T) {
 	}, nil))
 	model.Update(press('i'))
 	content := ansi.Strip(model.View().Content)
-	for _, want := range []string{"unverified", "/tmp/example.csv", "line 3 could not be saved", "source line: 4"} {
+	for _, want := range []string{"unverified", "/tmp/example.csv", "line 3 could not be saved", "source line: 4",
+		"Accepted means the SMTP server accepted the submission."} {
 		if !strings.Contains(content, want) {
 			t.Errorf("result did not include %q: %s", want, content)
 		}
@@ -238,9 +244,25 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 				}
 				return smail.SendResult{Outcome: smail.Accepted}
 			}}
-			model := openFixture(t, mailer, "Ada,ada@example.invalid,Start,\"First\nline\"\nQuinn,quinn@example.invalid,Follow-up,Second")
+			longLine := strings.Repeat("x", size.Width)
+			body := "Second\n" + longLine + "\n" + strings.Repeat("Body line\n", size.Height) + "End of preview"
+			model := openFixture(t, mailer, "Ada,ada@example.invalid,Start,\"First\nline\"\nQuinn,quinn@example.invalid,Follow-up,\""+body+"\"")
 			model.Update(size)
-			requireView(t, model, "Review 2 emails", "Continue to confirmation", "›")
+			requireView(t, model, "✉ Review 2 emails", "Enter Continue to confirmation", "⌕ Search name, address, subject or line")
+			requireHighlight(t, model, "1 + New batch")
+			requireHighlight(t, model, "▥ Messages")
+			requireHighlight(t, model, "2      ✉ ada@")
+			requireHeaderRule(t, model, &model.preview, "Recipient")
+			if model.split() {
+				requireView(t, model, "✉ Message preview", "┌", "→ To: Ada")
+				model.Update(press('/'))
+				typeText(model, "absent")
+				requireView(t, model, "No matching messages.", "Select a row to inspect it.")
+				if strings.ContainsRune(model.View().Content, '┌') {
+					t.Fatal("empty preview showed a frame")
+				}
+				model.Update(press(tea.KeyEscape))
+			}
 			model.Update(press('/'))
 			typeText(model, "quinn")
 			requireView(t, model, "Enter Apply search")
@@ -249,9 +271,17 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 				t.Fatalf("search: %v", model.preview.indices)
 			}
 			model.Update(press(tea.KeyTab))
-			requireView(t, model, "To: Quinn <quinn@example.invalid>", "Second")
+			border := strings.Repeat("─", model.detail.Width()-2)
+			wrapped := strings.Repeat("x", model.detail.Width()-4)
+			requireView(t, model, "┌"+border+"┐", "└"+border+"┘",
+				"→ To: Quinn <quinn@example.invalid>", "≡ Subject: Follow-up", "Second", "│ "+wrapped+" │")
+			requireHighlight(t, model, "✉ Message preview")
+			for range 4 {
+				model.Update(press(tea.KeyPgDown))
+			}
+			requireView(t, model, "End of preview", "└"+border+"┘")
 			model.Update(press(tea.KeyEnter))
-			requireView(t, model, "Send 2 emails", "S Send")
+			requireView(t, model, "➤ Send 2 emails", "S Send")
 			_, cmd := model.Update(press('s'))
 			model.Update(tea.WindowSizeMsg{Width: 45, Height: 10})
 			requireView(t, model, "Resize to at least", "Sending continues")
@@ -260,7 +290,15 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 			if !slices.Equal(attempted, []int{2, 4}) {
 				t.Fatalf("batch sent source lines %v", attempted)
 			}
-			requireView(t, model, "Accepted: 1", "Unconfirmed: 1", "Recovery CSV")
+			requireView(t, model, "✓ Accepted: 1", "? Unconfirmed: 1", "▤ Recovery CSV", "s-nail timed out",
+				"≡ All   ✓ Accepted   ? Unconfirmed   – Unattempted", "E Export", "I Info")
+			requireHighlight(t, model, "2      ✓ Accepted")
+			requireHeaderRule(t, model, &model.report.rows, "Diagnostic")
+			model.Update(press(tea.KeyTab))
+			requireView(t, model, "Row detail", "Line 2: Accepted", "E Export", "I Info")
+			if strings.ContainsRune(model.View().Content, '┌') {
+				t.Fatal("report row detail retained the message preview frame")
+			}
 
 			// Start another model to exercise actual on-disk history, including partial read failure.
 			dir := filepath.Join(os.Getenv("XDG_STATE_HOME"), "pp-email", "reports")
@@ -270,7 +308,10 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 			reopened := New(mailer, model.directory, nil)
 			reopened.Update(size)
 			advance(t, reopened, press('2'))
-			requireView(t, reopened, "Run history", "Skipped 1 unreadable", "Completed")
+			requireView(t, reopened, "▥ Run history", "Skipped 1 unreadable", "✓ Completed")
+			requireHighlight(t, reopened, "2 ▥ Reports")
+			requireHighlight(t, reopened, model.report.current.Finished.Local().Format("2006-01-02 15:04"))
+			requireHeaderRule(t, reopened, &reopened.report.history, "Finished")
 			reopened.Update(press('/'))
 			typeText(reopened, "absent")
 			requireView(t, reopened, "No matching runs")
@@ -281,7 +322,7 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 			advance(t, reopened, press(tea.KeyEnter))
 			reopened.Update(press(tea.KeyRight))
 			reopened.Update(press(tea.KeyRight))
-			requireView(t, reopened, "[Unconfirmed]")
+			requireHighlight(t, reopened, "? Unconfirmed")
 			if len(reopened.report.rows.indices) != 1 {
 				t.Fatalf("filtered report rows: %v", reopened.report.rows.indices)
 			}
@@ -291,10 +332,11 @@ func TestSearchReportsAndExportWorkflow(t *testing.T) {
 				requireView(t, reopened, "s-nail timed out")
 			}
 			reopened.Update(press('e'))
+			requireView(t, reopened, "Enter Save CSV", "Esc Cancel")
 			reopened.Update(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
 			typeText(reopened, "out.csv")
 			advance(t, reopened, press(tea.KeyEnter))
-			requireView(t, reopened, "Report saved to", "out.csv")
+			requireView(t, reopened, "↓ Export run as CSV", "✓ Report saved to", "out.csv", "Enter Done")
 			data, err := os.ReadFile(filepath.Join(model.directory, "out.csv"))
 			if err != nil {
 				t.Fatal(err)
@@ -323,6 +365,27 @@ func requireView(t *testing.T, model *Model, fragments ...string) {
 		if ansi.StringWidth(line) > model.width {
 			t.Fatalf("screen exceeds %d columns: %q", model.width, line)
 		}
+	}
+}
+
+func requireHeaderRule(t *testing.T, model *Model, b *browser, header string) {
+	t.Helper()
+	view := ansi.Strip(model.View().Content)
+	lines := strings.Split(view, "\n")
+	rule := "  " + strings.Repeat("─", b.table.Width())
+	for i, line := range lines[:len(lines)-1] {
+		if strings.Contains(line, header) && strings.HasPrefix(lines[i+1], rule) {
+			return
+		}
+	}
+	t.Errorf("missing full-width rule below %q:\n%s", header, view)
+}
+
+func requireHighlight(t *testing.T, model *Model, text string) {
+	t.Helper()
+	prefix, _, _ := strings.Cut(model.styles.selected.Render(text), text)
+	if prefix == "" || !strings.Contains(model.View().Content, prefix+text) {
+		t.Errorf("missing selection highlight on %q:\n%s", text, ansi.Strip(model.View().Content))
 	}
 }
 

@@ -151,8 +151,8 @@ func (m *Model) refreshHistory() {
 	for i, item := range m.report.summaries {
 		if matches(query, item.Account, item.Source) {
 			rows = append(rows, table.Row{
-				"", item.Finished.Local().Format("2006-01-02 15:04"),
-				reports.CleanText(item.Account), reports.CleanText(item.Source), reports.CleanText(item.Status),
+				item.Finished.Local().Format("2006-01-02 15:04"),
+				reports.CleanText(item.Account), reports.CleanText(item.Source), statusIcon(item.Status) + reports.CleanText(item.Status),
 				strconv.Itoa(item.Counts.Accepted), strconv.Itoa(item.Counts.Unconfirmed), strconv.Itoa(item.Counts.Unattempted),
 			})
 			indices = append(indices, i)
@@ -218,7 +218,7 @@ func (m *Model) refreshReportRows() {
 		label := reports.OutcomeLabel(row.Outcome)
 		line := strconv.Itoa(row.Line)
 		if (m.report.filter == 0 || label == outcomeFilters[m.report.filter]) && matches(query, line) {
-			rows = append(rows, table.Row{"", line, label, reports.CleanText(row.Reason)})
+			rows = append(rows, table.Row{line, outcomeIcon(label) + label, reports.CleanText(row.Reason)})
 			indices = append(indices, i)
 		}
 	}
@@ -231,7 +231,8 @@ func (m *Model) refreshReportRows() {
 func (m *Model) selectReportRow() {
 	if i, ok := m.report.rows.selected(); ok {
 		row := m.report.current.Rows[i]
-		detail := fmt.Sprintf("Line %d: %s", row.Line, reports.OutcomeLabel(row.Outcome))
+		label := reports.OutcomeLabel(row.Outcome)
+		detail := fmt.Sprintf("%sLine %d: %s", outcomeIcon(label), row.Line, label)
 		if row.Reason != "" {
 			detail += "\n\n" + reports.CleanText(row.Reason)
 		}
@@ -352,11 +353,11 @@ func (m *Model) cancelExport() {
 
 func runDetail(report reports.Report) string {
 	var lines []string
-	lines = append(lines, "Status: "+reports.CleanText(report.Status),
-		"Account: "+reports.CleanText(report.Account), "CSV: "+reports.CleanText(report.Source))
+	lines = append(lines, statusIcon(report.Status)+"Status: "+reports.CleanText(report.Status),
+		iconAccount+"Account: "+reports.CleanText(report.Account), iconFile+"CSV: "+reports.CleanText(report.Source))
 	if !report.Started.IsZero() {
-		lines = append(lines, "Started: "+report.Started.Local().Format(time.RFC3339),
-			"Finished: "+report.Finished.Local().Format(time.RFC3339))
+		lines = append(lines, "◷ Started: "+report.Started.Local().Format(time.RFC3339),
+			"◷ Finished: "+report.Finished.Local().Format(time.RFC3339))
 	}
 	lines = append(lines, "", countsText(report.Counts), "Accepted means the SMTP server accepted the submission.")
 	if report.Error != "" {
@@ -375,9 +376,36 @@ func runDetail(report reports.Report) string {
 }
 
 func recoveryText(report reports.Report) string {
-	return fmt.Sprintf("Recovery CSV (%s): %s", reports.CleanText(string(report.RecoveryStatus)), reports.CleanText(report.RecoveryPath))
+	return fmt.Sprintf("%sRecovery CSV (%s): %s", iconFile, reports.CleanText(string(report.RecoveryStatus)), reports.CleanText(report.RecoveryPath))
 }
 
 func countsText(counts batch.Counts) string {
-	return fmt.Sprintf("Accepted: %d   Unconfirmed: %d   Unattempted: %d", counts.Accepted, counts.Unconfirmed, counts.Unattempted)
+	return fmt.Sprintf("%sAccepted: %d %sUnconfirmed: %d %sUnattempted: %d",
+		iconAccept, counts.Accepted, iconPending, counts.Unconfirmed, iconSkipped, counts.Unattempted)
+}
+
+func outcomeIcon(label string) string {
+	switch label {
+	case "Accepted":
+		return iconAccept
+	case "Unconfirmed":
+		return iconPending
+	case "Unattempted":
+		return iconSkipped
+	default:
+		return "≡ "
+	}
+}
+
+func statusIcon(status string) string {
+	switch status {
+	case "Completed":
+		return iconAccept
+	case "Stopped":
+		return "■ "
+	case "Aborted":
+		return "! "
+	default:
+		return iconReport
+	}
 }
